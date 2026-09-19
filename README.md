@@ -90,12 +90,20 @@ to the agent, which will then ask the user for something it already has.
 
 ## Publishing
 
-A playbook is the distribution channel. Push the repository to one, and the
-skills plus their Python files are served as plain Markdown and text over HTTP:
+A playbook is the distribution channel. Link this repository to one, push, and
+the skills plus their Python files are served as plain Markdown and text over
+HTTP:
 
 ```bash
-apb push --yes                        # SKILL.md and scripts/*.py to the playbook
+apb login                             # once per machine
+apb pull <playbook-guid> --apply      # links this checkout to that playbook
+apb push --yes                        # SKILL.md and scripts/*.py go up
 ```
+
+The `pull` is what writes `.agentplaybooks/remote.json`, and every later `push`
+reads the target from there. Without it `push` offers to create a new playbook
+instead, which is a different thing and will say so in its plan. Nothing is
+uploaded until the plan is accepted.
 
 Set the playbook's visibility to **public** and every skill in it appears at
 
