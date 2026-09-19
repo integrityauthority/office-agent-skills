@@ -17,6 +17,22 @@ them from a URL.
 Both are Windows-and-Microsoft specific, which is why they live here rather
 than upstream in any one agent's repository.
 
+> ### Read this before pointing them at real work
+>
+> These skills act as **you**, with your privileges. `office-live` can change
+> any document you have open, and Excel and PowerPoint edits are immediate —
+> only Word edits arrive as tracked revisions you can reject. `m365-graph`
+> reads your own mail, files, chats and calendar.
+>
+> **Whatever the agent reads enters the model's context.** With a locally
+> hosted model that stays inside your network; with a hosted cloud model it
+> leaves your organisation. Decide that before you use these on anything
+> confidential — the skills cannot decide it for you.
+>
+> Both skills run Python that the model wrote. That is the design, not an
+> oversight; [SECURITY.md](SECURITY.md) explains the trade-off and what the
+> skills deliberately do *not* do.
+
 ## Why a thin Python layer instead of an MCP server
 
 An MCP server for Office would need a fixed tool list, and the interesting part
@@ -125,6 +141,51 @@ fresh `apb pull` takes the new version.
 Keep a playbook private while a skill is still being shaped: a private playbook
 is reachable with `apb pull` and a key, and serves nothing publicly.
 
-## Licence
+## Licence, warranty, and what this is not
 
-MIT. See [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE). Use, modify and redistribute it freely,
+commercially or otherwise, provided the copyright notice and the licence text
+travel with it.
+
+**Provided as is, without warranty of any kind.** That is the MIT text and it
+is meant literally here. This is working code published because it may be
+useful to others, not a product:
+
+- no fitness for any particular purpose is claimed or implied;
+- no support, no service level, no security maintenance commitment;
+- no liability for data loss, for a document edited in a way you did not
+  intend, or for anything an agent does while driving these skills;
+- publishing it is not advice, endorsement, certification or approval of any
+  kind by Integritás Hatóság, and it says nothing about the authority's
+  official activity.
+
+Test it on copies before you let it near anything that matters.
+
+### If you deploy this
+
+You become the operator. The skills read personal data — mail, documents,
+chats, calendar — and pass it to whichever model you configure. Deciding
+whether that is lawful in your setting, on what basis, and with what
+safeguards, is yours: these skills have no telemetry and send nothing anywhere
+by themselves, so every flow of data out of your environment is one you
+configured. `m365-graph` reads only what the signed-in user can already read,
+with delegated consent, and refuses non-read calls unless they name a write
+area explicitly.
+
+### Third-party software
+
+Nothing third-party is bundled here. At runtime the skills import
+[pywin32](https://github.com/mhammond/pywin32), and
+[msal](https://github.com/AzureAD/microsoft-authentication-library-for-python)
+(MIT), [requests](https://github.com/psf/requests) (Apache-2.0) and the
+[MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk) (MIT),
+each installed and licensed on its own terms. No code from any other project
+has been copied into this repository.
+
+### Trademarks
+
+Microsoft, Windows, Microsoft 365, Office, Word, Excel, PowerPoint, Outlook,
+SharePoint, OneDrive, Teams and Microsoft Graph are trademarks of the Microsoft
+group of companies. Hermes Agent is a project of Nous Research. They are named
+here only to say what this software works with. No affiliation with, sponsorship
+by or endorsement from any of them is claimed.
