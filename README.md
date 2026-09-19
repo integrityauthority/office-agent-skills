@@ -1,4 +1,4 @@
-# agent-skills
+# office-agent-skills
 
 Agent Skills for Microsoft Office and Microsoft 365, in the portable
 [Agent Skills](https://agentskills.io/specification) format. Each one is a
@@ -56,7 +56,7 @@ For Hermes that is one line in `~/.hermes/config.yaml`:
 ```yaml
 skills:
   external_dirs:
-    - D:/agent-skills/.agents/skills
+    - D:/office-agent-skills/.agents/skills
 ```
 
 **Through a playbook**, which is what keeps a team in step:
