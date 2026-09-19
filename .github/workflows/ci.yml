@@ -1,0 +1,20 @@
+# One check, the same one a maintainer runs locally: can every skill here
+# actually be published? A skill that fails this would be rejected by the
+# attachment store halfway through an upload, or would install with
+# instructions pointing at a file that never arrived.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  skills:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: python tools/check_skills.py
