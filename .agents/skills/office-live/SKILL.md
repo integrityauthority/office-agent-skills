@@ -215,29 +215,40 @@ and for Word whether tracking is on and how many revisions exist.
   means that failed too — usually pywin32's bitness does not match Office.
   Report it instead of writing blind; every write in this mode is unverifiable.
 
-`status` further reports, per document, `storage` and `backup_possible`. A
-SharePoint/OneDrive file has **no local copy to back up** — say so before
-editing, and note that the site's version history is the only undo.
+`status` further reports, per document, `storage` and `backup_possible`.
+Neither is a permission check — they tell you what to say afterwards, not
+whether to proceed:
+
+- `local` — a file exists, so back it up first.
+- `sharepoint` — no local copy to back up. Edit, and say that the site's
+  version history is the only undo.
+- `unsaved` — never saved, so there is nothing to copy. **Edit it anyway.**
+  The live document is the one on screen; there is no other copy to protect.
+  Mention afterwards that it is still unsaved.
 
 If several documents are open, name the one you mean and confirm before
 writing.
 
-**Stop if `status` flags a document.** After a crash, sleep, or a dropped
-network share, Office silently reopens files as AutoRecovery copies — the
-workbook becomes `name (version 1).xlsb` in a hidden per-user folder, and
-PowerPoint's path stops being a path at all. `status` marks these with
-`WARNING` and `do_not_edit_until_confirmed`. Editing one succeeds, reads back
-correctly, and changes **nothing in the user's real file**. Observed exactly
-that here. Do not edit a flagged document: tell the user what is actually
-open, and let them decide whether to recover it or reopen the original.
+**Stop if `status` flags a document with `WARNING`.** That flag means one
+specific thing: the open document is an AutoRecovery copy, not the user's
+file. After a crash, sleep, or a dropped network share, Office silently
+reopens files that way — the workbook becomes `name (version 1).xlsb` in a
+hidden per-user folder, or the file sits in a temp folder. Editing one
+succeeds, reads back correctly, and changes **nothing in the user's real
+file**. Observed exactly that here. Do not edit a flagged document: tell the
+user what is actually open, and let them decide whether to recover it or
+reopen the original.
+
+A never-saved document is **not** this case and carries no flag. Edit it.
 
 ## Safety protocol
 
 1. `status` — confirm you are on the right document.
 2. `office.py backup --host <word|excel|ppt>` — saves and copies the file as
-   `name.bak-<timestamp>.ext`. **Report the path.** If it says the file lives
-   on SharePoint/OneDrive, no local copy is possible — say so and rely on that
-   site's version history.
+   `name.bak-<timestamp>.ext`. **Report the path.** When there is no file to
+   copy — SharePoint/OneDrive, or a document that was never saved — this step
+   simply does not apply. Say so and carry on; it is never a reason to refuse
+   the edit or to ask the user to save first.
 3. **Word: turn tracking on** (`doc.TrackRevisions = True`) before editing.
 4. Edit **additively** — never touch existing revisions.
 5. **Verify by reading back** (next section).
@@ -374,7 +385,7 @@ edits must land as reviewable revisions. For a long interactive session, use
 | Command hangs | modal dialog open in Office | Ask the user to dismiss it. Do not retry blindly. |
 | `Office rejected the call` | app busy mid-operation | Wait, retry once, then tell the user. |
 | Stale COM errors after reopening Office | daemon holds dead refs | `office.py reset`. |
-| `never been saved to disk` | untitled document | Ask them to save once first. |
+| `never been saved to disk` | the `backup` command on an untitled document | Nothing to back up. Make the edit and say it is still unsaved. |
 
 ## Boundaries
 

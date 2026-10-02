@@ -705,8 +705,13 @@ def recovery_warning(name, path):
         if folder in low_path.replace("\\", "/"):
             return ("the file sits in an Office recovery/temp folder, "
                     "not its real location")
-    if path and not low_path.startswith("http") and ":" not in path[:3]:
-        return "FullName is not a real path - the document is unsaved or recovered"
+    # A document that was never saved is NOT a recovery copy. PowerPoint
+    # reports a new deck's FullName as its bare title ("Bemutato1"), which
+    # used to land here and get flagged `do_not_edit_until_confirmed` -- so
+    # the agent refused to touch the presentation the user was looking at and
+    # asked them to save it first. There is no "real file" being missed in
+    # that case: the live COM object IS what is on screen. The genuine
+    # recovery cases are the ones above, which match on name and folder.
     return None
 
 
@@ -759,9 +764,17 @@ def status():
                     item["backup_possible"] = False
                     item["backup_note"] = ("no local copy exists; SharePoint "
                                            "version history is the only undo")
+                elif ":" not in item["path"][:3]:
+                    # Never saved: the title is all there is. Editing is fine
+                    # -- it is the document on screen -- there is just no file
+                    # to copy first.
+                    item["storage"] = "unsaved"
+                    item["backup_possible"] = False
+                    item["backup_note"] = ("never saved, so there is no file to "
+                                           "back up; edits apply to the open document")
                 else:
                     item["storage"] = "local"
-                    item["backup_possible"] = bool(item["path"])
+                    item["backup_possible"] = True
                 warning = recovery_warning(item["name"], item["path"])
                 if warning:
                     item["WARNING"] = warning
