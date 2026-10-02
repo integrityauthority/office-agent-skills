@@ -710,7 +710,19 @@ def recovery_warning(name, path):
     return None
 
 
-def cmd_status(a):
+def status():
+    """What is running and what is open, as a dict.
+
+    Named `status` because that is what the skill document calls it and what
+    anyone reaching for it will type. It used to exist only as the CLI
+    subcommand handler `cmd_status`, so `from office import status` raised an
+    ImportError on a document that promised otherwise.
+
+    Returns, per host: whether it is running, and for each open document its
+    name, path, saved state, whether the file can be backed up at all, and for
+    Word whether revision tracking is on and how many revisions exist. A
+    document that looks like a crash-recovery copy carries a WARNING.
+    """
     w = _win32()
     report = {}
     # Touch COM once so EARLY_BINDING is populated before we report it.
@@ -758,7 +770,11 @@ def cmd_status(a):
         except Exception as e:
             entry["error"] = str(e)
         report[host] = entry
-    out(report)
+    return report
+
+
+def cmd_status(a):
+    out(status())
 
 
 # ------------------------------------------------------------------ word ---

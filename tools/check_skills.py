@@ -76,6 +76,49 @@ def bundled_files(directory: Path) -> list[str]:
     return names
 
 
+def module_exports(path: Path) -> set[str] | None:
+    """Top-level names a module defines, or None if it will not parse."""
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    except SyntaxError:
+        return None
+    names: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+        elif isinstance(node, ast.Assign):
+            names.update(t.id for t in node.targets if isinstance(t, ast.Name))
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            names.add(node.target.id)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            names.update(a.asname or a.name.split(".")[0] for a in node.names)
+    return names
+
+
+def check_documented_imports(directory: Path, text: str) -> list[str]:
+    """Every `from <module> import a, b` in the document must name something
+    the module really defines.
+
+    This is the failure the repository exists to prevent, one level deeper
+    than a missing file: the SKILL.md listed `status` beside `attach` and
+    `probe` as though all three were importable. Only two were, so an agent
+    that believed the document got an ImportError at the first call.
+    """
+    problems = []
+    pattern = r"^\s*from\s+([A-Za-z_][A-Za-z0-9_]*)\s+import\s+([^\n(]+)"
+    for module, imported in re.findall(pattern, text, re.M):
+        source = directory / "scripts" / f"{module}.py"
+        if not source.is_file():
+            continue  # a third-party module, not ours to verify
+        exports = module_exports(source)
+        if exports is None:
+            continue  # the parse failure is reported on its own
+        for name in (n.strip().split(" as ")[0].strip() for n in imported.split(",")):
+            if name and name != "*" and name not in exports:
+                problems.append(f"SKILL.md imports '{name}' from {module}, which does not define it")
+    return problems
+
+
 def check_skill(directory: Path) -> list[str]:
     problems: list[str] = []
     name = directory.name
@@ -129,6 +172,8 @@ def check_skill(directory: Path) -> list[str]:
         # A SKILL.md that tells the agent to import a file the skill does not
         # ship is the failure this whole check exists to prevent, so the
         # reference is verified rather than assumed.
+    problems.extend(check_documented_imports(directory, text))
+
     mentioned = re.findall(r"(?:scripts|references|assets|examples|templates)/[A-Za-z0-9][A-Za-z0-9._-]*", text)
     # A path at the end of a sentence picks up the full stop; a file name never
     # ends in one, so trailing punctuation is prose rather than part of it.
