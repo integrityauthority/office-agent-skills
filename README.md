@@ -80,6 +80,57 @@ skills:
 apb pull <playbook-guid> --apply      # writes .agents/skills/, scripts included
 ```
 
+## As Hermes plugins
+
+The same code is also packaged as two [Hermes Agent](https://hermes-agent.nousresearch.com)
+plugins, so a colleague installs one thing instead of copying folders and
+editing `config.yaml`:
+
+| Plugin | What it gives Hermes | Tools |
+|---|---|---|
+| `office-connector` | Work in the Word, Excel and PowerPoint documents you already have open | `office_status`, `office_exec`, `office_reset` |
+| `ms-graph-connector` | Read your own Microsoft 365: Outlook mail, OneDrive and SharePoint files, Teams chats, calendar | `m365_status`, `m365_login`, `m365_search`, `m365_get` |
+
+```bash
+hermes plugins install integrityauthority/office-agent-skills#plugins/office-connector
+hermes plugins install integrityauthority/office-agent-skills#plugins/ms-graph-connector
+```
+
+Both pass `hermes plugins validate`, the catalogue admission gate.
+`ms-graph-connector` scans clean; `office-connector` passes with a caution,
+for the reason set out under **What they do and do not do**.
+
+### One source, two shapes
+
+The Python lives in exactly one place, `.agents/skills/<skill>/`. A plugin
+directory is an adapter — a manifest and a `register()` — plus a **copy** of
+that skill's files.
+
+The copy is not a preference. `hermes plugins install` installs one directory
+and nothing outside it comes along, so a plugin that reached up into
+`.agents/` would validate here and be broken for everyone who installed it.
+What keeps the copy honest is that it is generated:
+
+```bash
+py tools/sync_plugins.py            # refresh
+py tools/sync_plugins.py --check    # fail on drift — CI runs this
+```
+
+Edit the skill, run the sync, commit both. Never edit a file under
+`plugins/*/scripts/`.
+
+### Plugin or skill?
+
+Install the **plugin** if you use Hermes: the tools appear in the tool
+catalogue where the model can see them, one warm COM connection serves the
+whole session, and there is no MCP server to wire up.
+
+Take the **skill** for anything else — Claude Code, Cursor, Codex — or when
+you want the instructions without the tools. Note that a skill registered by
+a plugin is deliberately left out of Hermes' `<available_skills>`, so inside
+Hermes the tools are what the agent discovers; the skill document rides along
+as reference material.
+
 ## Developing a skill
 
 Edit the files in place and run the checker:

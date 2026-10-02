@@ -1,0 +1,23 @@
+manifest_version: 2
+name: office-connector
+version: 1.1.0
+description: >-
+  Let Hermes work in Word, Excel and PowerPoint. Drives the documents you
+  already have open rather than producing new files, so edits appear in the
+  window in front of you and Word changes arrive as tracked revisions you can
+  accept or reject. Windows for now.
+author: Integritas Hatosag
+kind: standalone
+platforms: [windows]
+
+provides_tools:
+  - office_status
+  - office_exec
+  - office_reset
+
+# pywin32 ships inside the Hermes virtual environment already, so on a normal
+# installation this resolves to a no-op. It is declared because the plugin is
+# unusable without it and a missing dependency should fail at install time
+# rather than on the first tool call.
+python_dependencies:
+  - pywin32

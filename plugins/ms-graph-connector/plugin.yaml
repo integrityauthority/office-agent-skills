@@ -1,0 +1,30 @@
+manifest_version: 2
+name: ms-graph-connector
+version: 1.1.0
+description: >-
+  Give Hermes read access to your own Microsoft 365: Outlook mail, OneDrive and
+  SharePoint documents, Teams chats and your calendar, through the Microsoft
+  Graph API. It sees exactly what you see and nothing more, signs you in through
+  your browser, and cannot write -- every tool here is read-only.
+author: Integritas Hatosag
+kind: standalone
+
+# Nothing platform-specific: it is HTTPS and a browser sign-in.
+platforms: [windows, macos, linux]
+
+provides_tools:
+  - m365_status
+  - m365_login
+  - m365_search
+  - m365_get
+
+python_dependencies:
+  - msal
+  - requests
+
+# Optional. Unset, the module borrows the public client id Microsoft publishes
+# for its Graph command line tools, which works but makes the tenant's sign-in
+# log name that application rather than this one. Register your own Entra ID
+# application and set this for anything beyond trying the plugin out.
+optional_env:
+  - MSGRAPH_CLIENT_ID

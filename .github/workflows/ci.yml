@@ -18,3 +18,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: python tools/check_skills.py
+      # The plugins ship a copy of each skill's files, because `hermes plugins
+      # install` takes one directory and nothing outside it. The copy is a
+      # derived artefact; this fails the build if it stops matching.
+      - run: python tools/sync_plugins.py --check
