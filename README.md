@@ -30,8 +30,7 @@ than upstream in any one agent's repository.
 > confidential — the skills cannot decide it for you.
 >
 > Both skills run Python that the model wrote. That is the design, not an
-> oversight; [SECURITY.md](SECURITY.md) explains the trade-off and what the
-> skills deliberately do *not* do.
+> oversight — see **What they do and do not do** below.
 
 ## Why a thin Python layer instead of an MCP server
 
@@ -140,6 +139,46 @@ fresh `apb pull` takes the new version.
 
 Keep a playbook private while a skill is still being shaped: a private playbook
 is reachable with `apb pull` and a key, and serves nothing publicly.
+
+## What they do and do not do
+
+Both skills act as the signed-in user and gain no access that user did not
+already have. `office-live` drives the Office applications already running on
+the desktop through COM; Word edits are tracked revisions, Excel and
+PowerPoint edits are immediate. `m365-graph` reads the user's own Microsoft
+365 content with a delegated token and refuses non-read calls in code — a
+write has to name an area from a fixed list and the request path has to belong
+to it, or the call never leaves the machine.
+
+What does not happen: `office-live` makes **no outbound network calls at all**,
+neither skill reports telemetry anywhere, and no credential is stored by them
+(`m365-graph` uses MSAL's own token cache and never sees a password). Nothing
+is sent to a model by the skills themselves — whatever the agent reads enters
+its context, and where that goes is decided by the model you configured.
+
+`office.py --warm` keeps a background process holding the COM objects between
+calls, because cold-starting COM costs a third of a second each time. It binds
+`127.0.0.1` on an ephemeral port, requires a 128-bit random token on every
+request, and exits by itself after 45 idle minutes. The token lives in the
+user's own profile directory, so a shared or roaming profile deserves thought.
+
+**The part that trips a security scanner.** `scripts/office_kernel.py` calls
+`exec(compile(...))` and `scripts/office.py` spawns a subprocess. Both are
+deliberate: a fixed tool list cannot cover the Office object model, so the
+skill hands the agent the live objects and lets it write the few lines it
+needs. From the outside those patterns are indistinguishable from a hostile
+skill, which is why Hermes Agent's skill-hub scanner refuses to install these
+without `--force` — correctly. Trust here comes from reading the source and
+from knowing where you got it, not from a scan. If that trade-off does not
+work in your environment, do not install these.
+
+**The Microsoft Graph client id.** By default `m365-graph` authenticates with
+the public client id of Microsoft Graph Command Line Tools, Microsoft's own
+published id. It is not a secret and not ours, but it has two consequences:
+your tenant's sign-in log names that application rather than this skill, and
+tenant-wide consent granted to that id is granted to anything using it. For
+anything beyond trying the skill out, register your own Entra ID application
+and set `MSGRAPH_CLIENT_ID`. No code change is needed.
 
 ## Licence, warranty, and what this is not
 
