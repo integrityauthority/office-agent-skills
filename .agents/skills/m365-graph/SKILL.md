@@ -176,6 +176,8 @@ conversation when a summary and a link will do.
 | `consent was not granted (AADSTS65001)` | user declined, or consent is disabled | try `--minimal`; if that fails too, an admin must approve |
 | `needs administrator approval (AADSTS90094)` | admin-only scope requested | drop that scope; channel search is not available without an admin |
 | `application is not present in this tenant (AADSTS700016)` | default client blocked | set `MSGRAPH_CLIENT_ID` to your own app registration |
+| `registered single-tenant ... /organizations (AADSTS50194)` | own app is single-tenant, tenant id not set | set `MSGRAPH_TENANT_ID` next to `MSGRAPH_CLIENT_ID` |
+| `does not allow public client flows (AADSTS7000218)` | registration setting | Entra: Authentication -> Allow public client flows = Yes; no secret needed |
 | `multi-factor authentication is required` | MFA prompt | the user must complete it in the browser |
 | `denied the request (403)` | missing scope, or genuinely no access | check `mg scopes` before assuming a bug |
 | `partial_failures` in a search result | one entity group failed, others worked | read which scope is missing; the rest of the hits are still valid |

@@ -120,6 +120,13 @@ AAD_HINTS = {
     "AADSTS700016": ("the application is not present in this tenant",
                      "Set MSGRAPH_CLIENT_ID to an app registered in your own "
                      "tenant, or ask for the default client to be enabled."),
+    "AADSTS50194": ("the app is registered single-tenant, but sign-in went to "
+                    "the shared /organizations endpoint",
+                    "Set MSGRAPH_TENANT_ID to the Directory (tenant) ID from "
+                    "the app registration, next to MSGRAPH_CLIENT_ID."),
+    "AADSTS7000218": ("the app registration does not allow public client flows",
+                      "In Entra: the app -> Authentication -> 'Allow public "
+                      "client flows' = Yes. No client secret is needed."),
     "AADSTS50076": ("multi-factor authentication is required",
                     "Complete the MFA prompt in the browser window, then "
                     "retry. Do not retry without the user present."),
@@ -184,6 +191,19 @@ def client_id():
     return os.environ.get("MSGRAPH_CLIENT_ID", "").strip() or DEFAULT_CLIENT_ID
 
 
+def authority():
+    """Where to sign in. Tenant-specific when MSGRAPH_TENANT_ID is set.
+
+    /organizations works for the borrowed multi-tenant CLI client, but NOT for
+    an app registered as single-tenant ("accounts in this organizational
+    directory only") — Entra refuses that with AADSTS50194. Single-tenant is
+    exactly what we ask IT for, so the tenant id has to travel with the client
+    id; setting only MSGRAPH_CLIENT_ID would fail at the first sign-in.
+    """
+    tenant = os.environ.get("MSGRAPH_TENANT_ID", "").strip()
+    return f"https://login.microsoftonline.com/{tenant}" if tenant else AUTHORITY
+
+
 def _dpapi(data, unprotect=False):
     """Encrypt/decrypt with the current Windows user's DPAPI key."""
     try:
@@ -242,7 +262,7 @@ def granted_scopes():
 
 def _app(cache):
     msal = _msal()
-    return msal.PublicClientApplication(client_id(), authority=AUTHORITY,
+    return msal.PublicClientApplication(client_id(), authority=authority(),
                                         token_cache=cache)
 
 
@@ -538,6 +558,7 @@ def cmd_status(a):
         "msal_installed": True,
         "client_id": client_id(),
         "using_default_client": client_id() == DEFAULT_CLIENT_ID,
+        "authority": authority(),
         "signed_in": False,
         "account": st.get("account"),
         "granted_scopes": granted_scopes(),
