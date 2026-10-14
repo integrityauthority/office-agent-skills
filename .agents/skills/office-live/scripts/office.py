@@ -47,6 +47,31 @@ class OfficeError(RuntimeError):
         self.hint = hint
 
 
+def com_date(value):
+    """The form a date must take to land on the intended wall clock over COM.
+
+    pywin32 converts every datetime it sends — naive or aware — to UTC, while
+    Office stores the number it receives as LOCAL wall-clock time. Measured on
+    a CET machine: an Outlook meeting set for 10:00 came out at 09:00, and an
+    Excel deadline at midnight landed on 23:00 THE DAY BEFORE. Labelling the
+    local wall clock as UTC makes pywin32 pass it through unchanged, in summer
+    and winter time alike.
+
+        ws.Range("B2").Value = com_date("2026-11-13")          # midnight, same day
+        appt.Start = com_date(datetime(2026, 11, 13, 10, 0))   # 10:00 local
+
+    Reading needs no help: values come back as the local wall clock (tagged
+    "GMT"); drop the tzinfo and use them as they are.
+    """
+    if isinstance(value, str):
+        value = _dt.datetime.fromisoformat(value)
+    if isinstance(value, _dt.date) and not isinstance(value, _dt.datetime):
+        value = _dt.datetime(value.year, value.month, value.day)
+    if value.tzinfo is not None:
+        value = value.astimezone().replace(tzinfo=None)   # to local wall clock
+    return value.replace(tzinfo=_dt.timezone.utc)
+
+
 def out(data):
     print(json.dumps({"ok": True, "data": data}, ensure_ascii=False))
     sys.exit(0)
@@ -67,11 +92,18 @@ def attach(host, name=None, launch=False):
         from office import attach
         app, doc = attach("word")
 
+    attach("outlook") returns (app, namespace) instead — Outlook has no
+    documents — both wrapped so that nothing can send, save or delete; see
+    outlook.py.
+
     Raises OfficeError with an actionable .hint on every failure.
     """
+    if host == "outlook":
+        import outlook
+        return outlook.attach_outlook()
     if host not in HOSTS:
         raise OfficeError(f"unknown host {host!r}",
-                          f"expected one of {list(HOSTS)}")
+                          f"expected one of {list(HOSTS) + ['outlook']}")
     app = get_app(host, launch=launch)
     return app, pick(app, host, name)
 
@@ -993,6 +1025,11 @@ def status():
         except Exception as e:
             entry["error"] = str(e)
         report[host] = entry
+    try:
+        import outlook
+        report["outlook"] = outlook.outlook_status()
+    except Exception as e:
+        report["outlook"] = {"running": False, "note": str(e)}
     return report
 
 
@@ -1305,6 +1342,15 @@ FORBIDDEN = [
      "raw Close would also close the user's documents - use close_doc(doc), "
      "which allows it for documents this session opened or created"),
     (r"\bQuit\(", "quitting the application is the user's call"),
+    (r"\.Send\s*\(|\bSendMail\s*\(|\bSendForReview\s*\(",
+     "sending is the user's call - compose the item, call .Display(), and "
+     "let them review it and press Send"),
+    (r"(GetActiveObject|DispatchEx|EnsureDispatch|Dispatch)\s*\(\s*['\"]Outlook",
+     "reach Outlook through attach('outlook') or the outlook helpers - a raw "
+     "Outlook object skips the send/save guard"),
+    (r"get_app\s*\(\s*['\"]outlook|\b_raw_(app|ns|folder)\s*\(",
+     "use attach('outlook') and the outlook helpers - the raw objects skip "
+     "the send/save guard"),
     (r"TrackRevisions\s*=\s*(False|0)", "never turn revision tracking off"),
     (r"DisplayAlerts\s*=", "suppressing Office alerts hides destructive prompts"),
 ]
@@ -1316,8 +1362,9 @@ def refuse(code):
     for pattern, why in FORBIDDEN:
         if re.search(pattern, code):
             return {"ok": False, "error": f"refused: {why}",
-                    "hint": "this tool only ADDS tracked edits; leave review "
-                            "decisions and file lifecycle to the user"}
+                    "hint": "the reason names the safe route; review "
+                            "decisions, sending and file lifecycle stay with "
+                            "the user"}
     return None
 
 
@@ -1351,7 +1398,14 @@ def _seed(ns):
                "count_text": count_text, "stories": stories,
                "final_text": final_text, "text_chunks": text_chunks,
                "doc_kind": doc_kind, "open_doc": open_doc, "new_doc": new_doc,
-               "save_as": save_as, "close_doc": close_doc, "owned": owned})
+               "save_as": save_as, "close_doc": close_doc, "owned": owned,
+               "status": status, "com_date": com_date})
+    import outlook
+    ns.update({name: getattr(outlook, name) for name in (
+        "find_mail", "get_mail", "open_item", "current_mail", "summary",
+        "new_mail", "reply", "forward", "add_attachment", "folder",
+        "calendar", "new_appointment", "resolve", "find_contact",
+        "new_contact", "outlook_status")})
 
 
 def _describe_exception(e):

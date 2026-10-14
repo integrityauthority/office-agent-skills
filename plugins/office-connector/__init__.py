@@ -70,9 +70,10 @@ def register(ctx):
         "office_status", "office", NO_ARGS_SCHEMA, _status,
         description=(
             "List which Office applications are running and which documents are "
-            "open: name, path, saved state, and for Word whether revision "
-            "tracking is on and how many tracked revisions exist. Call this "
-            "first, and again whenever it is unclear which document is active."
+            "open: name, path, saved state, whether a backup is possible, any "
+            "crash-recovery warning, and for Word the revision state. Also "
+            "classic Outlook: running, accounts, unread and draft counts. Call "
+            "this first, and again whenever it is unclear what is active."
         ),
         emoji="\N{MEMO}",
     )
@@ -80,10 +81,15 @@ def register(ctx):
     ctx.register_tool(
         "office_exec", "office", EXEC_SCHEMA, _exec,
         description=(
-            "Run Python against the Word, Excel or PowerPoint document the user "
-            "has open, over COM. Use for reading or changing a document in "
-            "place rather than producing a new file. Word edits are made as "
-            "tracked revisions. The namespace persists between calls."
+            "Run Python against the user's running Office over COM: the open "
+            "Word, Excel or PowerPoint document, and classic Outlook — search "
+            "mail, read messages, compose new mail, replies and forwards with "
+            "attachments and formatting, calendar and contacts. Outlook items "
+            "are composed and opened for the user; sending and saving are "
+            "refused, the user presses Send. Word edits are tracked "
+            "revisions. Helpers are preloaded (find_mail, new_mail, reply, "
+            "calendar, open_doc, replace_all, com_date, ...) and the "
+            "namespace persists between calls."
         ),
         emoji="\N{PENCIL}",
     )

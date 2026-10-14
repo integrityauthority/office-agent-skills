@@ -1,11 +1,13 @@
 manifest_version: 2
 name: office-connector
-version: 1.1.0
+version: 1.2.0
 description: >-
-  Let Hermes work in Word, Excel and PowerPoint. Drives the documents you
-  already have open rather than producing new files, so edits appear in the
-  window in front of you and Word changes arrive as tracked revisions you can
-  accept or reject. Windows for now.
+  Let Hermes work in Word, Excel, PowerPoint and classic Outlook. Drives the
+  documents you already have open rather than producing new files, so edits
+  appear in the window in front of you and Word changes arrive as tracked
+  revisions you can accept or reject. In Outlook it searches mail, calendar
+  and contacts and composes messages and meetings, then opens them for you —
+  it never sends or saves; you press Send. Windows for now.
 author: Integritas Hatosag
 kind: standalone
 platforms: [windows]

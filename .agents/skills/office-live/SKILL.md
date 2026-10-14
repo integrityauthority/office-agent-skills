@@ -1,7 +1,7 @@
 ---
 name: office-live
-description: Read and modify the Microsoft Office document the user currently has OPEN on their Windows machine — Word, Excel, or PowerPoint — via COM automation. Use when the user refers to "this document", "the open file", "the sheet I'm looking at", "my selection", or asks for changes to be made in place rather than as a new file. Do NOT use for generating a document from scratch (write a .docx/.xlsx/.pptx file instead), and do NOT use on non-Windows machines.
-version: 2.0.0
+description: Work live in the user's running Microsoft Office on Windows over COM — read and edit the OPEN Word, Excel or PowerPoint document, and in classic Outlook search mail, read messages, compose new mail, replies and forwards with attachments and formatting, look up contacts and the calendar, and prepare appointments. Use when the user refers to "this document", "the open file", "my selection", "my inbox", "reply to that email", "my calendar", or asks for work in place rather than as a new file. Outlook items are composed and opened for the user to review — this skill never sends or saves mail. Do NOT use for generating a document from scratch (write a .docx/.xlsx/.pptx file instead), and do NOT use on non-Windows machines.
+version: 2.1.0
 author: Integritás Hatóság
 platforms: [windows]
 ---
@@ -323,6 +323,12 @@ failures found on this exact stack:
   raw text counts do not drop. Verify with `final_text` / `count_text(...,
   accepted=True)`, never with `Range.Text` alone.
 - `Find.Text` is capped at 255 characters; longer patterns are rejected.
+- **Writing a date over COM shifts it by your UTC offset.** pywin32 sends every
+  datetime as UTC; Office stores what it gets as local time. Measured: an
+  Outlook meeting set for 10:00 landed at 09:00, and an Excel deadline at
+  midnight became **23:00 the day before**. Always write dates through
+  `com_date(...)` — `ws.Range("B2").Value = com_date("2026-11-13")`. Reading
+  needs nothing: drop the `tzinfo` and the value is the local wall clock.
 - Assigning `Paragraphs(n).Range.Text = ...` **swallows the paragraph mark and
   merges the paragraph into the next one** — the paragraph count drifts and the
   edit is not atomic. For text substitution use `replace_all`; to change one
@@ -400,6 +406,77 @@ s.Shapes(1).TextFrame.TextRange.Text = "Új cím"
 s.NotesPage.Shapes.Placeholders(2).TextFrame.TextRange.Text = "Előadói jegyzet."
 pres.Slides.AddSlide(pres.Slides.Count + 1, pres.SlideMaster.CustomLayouts(2))
 ```
+
+### Outlook
+
+Classic Outlook only (`OUTLOOK.EXE`). The new Outlook (`olk.exe`) has no COM
+interface at all — if `status()` says Outlook is not running and the user has
+it open, that is why; say so instead of retrying.
+
+**The approval rule is built in: you compose, the user sends.** Every Outlook
+object you get is wrapped so that `.Send()`, `.Save()`, `.Delete()`,
+`.Move()`, `.Copy()` and `.Close()` are refused, and setting `UnRead` or flags
+on an existing message is refused too. Build the item, call `.Display()` (the
+helpers do it for you), and tell the user it is open for them to review — they
+press Send or Save. Never claim a message was sent.
+
+```python
+status()["outlook"]                    # running? accounts, unread, drafts
+
+# search — summaries only, newest first, no bodies (they are large and private)
+find_mail(since_days=7)
+find_mail(query="hiánypótlás", since_days=30)
+find_mail(sender="kovacs", unread=True)          # name OR e-mail address
+find_mail(folder_name="sent", since="2026-10-01", until="2026-10-15")
+get_mail(entry_id, max_chars=4000)               # one message, with body
+current_mail()                                   # what the user has selected/open
+
+# compose — opened for the user, NOT sent
+new_mail(to=["kovacs.janos@pelda.hu"], subject="Hiánypótlás",
+         html="<p>Tisztelt Kovács Úr!</p><p>A <b>15 napos</b> határidő ...</p>"
+              "<ul><li>első</li><li>második</li></ul>",
+         attachments=[r"C:\...\felhivas.pdf"])
+reply(entry_id, body="Köszönöm, megnézem.")      # text goes ABOVE the quote
+reply(entry_id, html="...", reply_all=True)
+forward(entry_id, to="x@pelda.hu", body="Továbbítom.")
+add_attachment(item, r"C:\...\melleklet.docx")
+
+# calendar — read freely, compose meetings for the user to send
+calendar(days=7)                                 # recurring meetings expanded
+new_appointment("Egyeztetés", "2026-11-13 10:00", minutes=45,
+                location="Tárgyaló", attendees=["kovacs.janos@pelda.hu"])
+
+# contacts
+resolve("Kovács János")          # address book (GAL) -> {"name", "email"}
+find_contact("Kovács")           # Contacts folder + address book
+new_contact("Teszt Elek", email="...", company="...")
+```
+
+Formatting: pass `html=` for anything beyond plain paragraphs — bold, lists,
+tables, links. Outlook's default font is applied around it, and when the item
+is displayed the user's own signature is kept, with your text above it
+(verified live). `body=` takes plain text; blank lines become paragraphs.
+
+Things that will bite:
+
+- **Resolve people first.** `to="Kovács"` may resolve to the wrong Kovács or
+  not at all. `resolve()` it, and if two people match, ask.
+- **Outlook collections are not callable**: `item.Recipients.Item(1)`, not
+  `item.Recipients(1)` (TypeError under early binding).
+- **Searching by e-mail address**: for an Exchange sender the plain
+  `fromemail` field holds an X500 path, not the SMTP address. `find_mail(
+  sender=...)` also checks the SMTP property; hand-written DASL must too
+  (`0x5D01001F`), or it finds a fraction of the mail.
+- **Dates in filters**: Jet syntax (`[ReceivedTime] >= '2026-10-01 00:00'`)
+  matches local time exactly. DASL date filters read the value as UTC and miss
+  messages at the edges; with a trailing `Z` they silently matched almost the
+  whole inbox. The helpers chain Jet for dates and DASL for text.
+- **Outlook's own AutoSave**: an unsent item left open is saved to Drafts by
+  Outlook itself after a few minutes. That is Outlook, not you — nothing is
+  sent — but mention it if the user leaves drafts lying open.
+- `find_mail` returns every item kind (mail, meeting requests and responses,
+  delivery reports) labelled with `kind`; filter on it rather than assuming
+  everything is a message.
 
 ## Performance — and when NOT to use this skill
 

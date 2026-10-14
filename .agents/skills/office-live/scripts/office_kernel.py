@@ -30,7 +30,6 @@ import contextlib
 import io
 import json
 import queue
-import re
 import sys
 import threading
 import traceback
@@ -45,32 +44,18 @@ _requests: "queue.Queue[tuple]" = queue.Queue()
 # thread; nothing outside that thread may touch COM objects stored here.
 _NS: dict = {}
 
-# Edits that destroy the human review trail or the user's work. The kernel is
-# for a colleague-style agent working under revision tracking; these calls
-# have no legitimate place in that loop, so they are refused outright.
-_FORBIDDEN = [
-    (r"\bAcceptAll(Revisions)?\b", "accepting revisions erases the review trail"),
-    (r"\bRejectAll(Revisions)?\b", "rejecting revisions erases the review trail"),
-    (r"\.Accept\(\)", "accepting a revision is the human reviewer's call"),
-    (r"\.Reject\(\)", "rejecting a revision is the human reviewer's call"),
-    (r"\bSaveAs2?\b", "SaveAs can silently overwrite another file"),
-    (r"\.Close\(", "closing documents is the user's call"),
-    (r"\bQuit\(", "quitting the application is the user's call"),
-    (r"TrackRevisions\s*=\s*(False|0)", "never turn revision tracking off"),
-    (r"DisplayAlerts\s*=", "suppressing Office alerts hides destructive prompts"),
-]
 
 
 def _seed_namespace():
     """(Re)build the persistent namespace with the helpers preloaded."""
     import office  # noqa: the sibling module; sys.path is set in main()
 
-    _NS.clear()
-    _NS.update({
-        "attach": office.attach,
-        "OfficeError": office.OfficeError,
-        "json": json,
-    })
+    # office._seed is the single list of what is preloaded. This module used
+    # to keep its own three-name copy (attach, OfficeError, json), so every
+    # helper added since — open_doc, close_doc, replace_all, probe, the
+    # Outlook functions — was missing from the plugin, and the agent imported
+    # them by hand in every call.
+    office._seed(_NS)
 
 
 def _run_snippet(code: str) -> dict:
@@ -156,50 +141,38 @@ def office_exec(code: str) -> str:
         doc.TrackRevisions = True
         doc.Revisions.Count              # last expression = return value
 
-    `attach(host, name=None)` and `json` are preloaded. Full COM object model
-    is available — write COM calls directly, there is no wrapper layer.
+    Preloaded: attach, status, open_doc/new_doc/save_as/close_doc,
+    replace_all, probe, explore, and for Outlook find_mail, get_mail,
+    current_mail, new_mail, reply, forward, calendar, new_appointment,
+    resolve, find_contact. Full COM object model otherwise — write COM calls
+    directly.
     Edits appear in the user's open window immediately. ALWAYS verify a write
     by reading the affected region back in a follow-up call.
-    Refused for safety: accepting/rejecting revisions, SaveAs, Close, Quit,
-    disabling TrackRevisions or DisplayAlerts.
+    Refused for safety: accepting/rejecting revisions, raw SaveAs/Close (use
+    save_as/close_doc), Quit, disabling TrackRevisions or DisplayAlerts, and
+    anything that sends, saves or deletes in Outlook — compose and .Display()
+    instead, the user presses Send.
     """
-    for pattern, why in _FORBIDDEN:
-        if re.search(pattern, code):
-            return json.dumps({
-                "ok": False,
-                "error": f"refused: {why}",
-                "hint": "this kernel only ADDS tracked edits; leave review "
-                        "decisions and file lifecycle to the user",
-            }, ensure_ascii=False)
+    # The guard lives in office.refuse. This module used to carry its own copy
+    # of the pattern list, which drifted: the plugin kept refusing Close with
+    # the old wording and no pointer to close_doc after office.py had moved on.
+    import office
+    refusal = office.refuse(code)
+    if refusal:
+        return json.dumps(refusal, ensure_ascii=False)
     return json.dumps(_submit(code), ensure_ascii=False)
 
 
 def office_status() -> str:
-    """List which Office apps are running and which documents are open (name,
-    path, saved state; for Word also whether revision tracking is on and how
-    many tracked revisions exist). Call this FIRST, and re-check when unsure
-    which document is active."""
-    snippet = """
-import office as _o
-_report = {}
-for _host in ("word", "excel", "ppt"):
-    try:
-        _app, _ = None, None
-        _app = _o.get_app(_host)
-        _docs = []
-        for _d in _o.collection(_app, _host):
-            _item = {"name": _d.Name, "path": getattr(_d, "FullName", ""),
-                     "saved": bool(_d.Saved)}
-            if _host == "word":
-                _item["track_revisions"] = bool(_d.TrackRevisions)
-                _item["revisions"] = _d.Revisions.Count
-            _docs.append(_item)
-        _report[_host] = {"running": True, "documents": _docs}
-    except Exception as _e:
-        _report[_host] = {"running": False, "note": str(_e)}
-result = _report
-"""
-    return json.dumps(_submit(snippet), ensure_ascii=False)
+    """Which Office applications are running and what is open — Word, Excel,
+    PowerPoint documents with their storage, backup possibility and any
+    AutoRecovery warning, plus Outlook (counts only). Call this FIRST, and
+    again whenever it is unclear which document is active."""
+    # office.status() is the one implementation. This used to be a private
+    # snippet that predated the storage/backup fields, the AutoRecovery
+    # warning, the COM binding report and Outlook.
+    return json.dumps(_submit("import office as _o\nresult = _o.status()"),
+                      ensure_ascii=False, default=str)
 
 
 def office_reset() -> str:
