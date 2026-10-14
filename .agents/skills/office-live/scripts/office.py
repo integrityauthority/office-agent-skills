@@ -252,6 +252,102 @@ def pick(app, host, name=None):
     return app.ActivePresentation
 
 
+# ------------------------------------------------------ opening and closing ---
+#
+# The blanket ban on Close/SaveAs protects the documents the USER has open. It
+# was wrong about the ones we open ourselves: an agent that opens a file to
+# read it should close it afterwards, and a workbook it just created has to be
+# saved somewhere. Refusing both left the agent fighting the tool and falling
+# back to hand-written COM.
+#
+# So ownership is tracked instead. These helpers may touch what this process
+# opened or created; everything else stays the user's.
+
+_OWNED = set()
+
+
+def _doc_key(doc):
+    try:
+        name = doc.FullName
+    except Exception:
+        name = None
+    if not name:
+        name = getattr(doc, "Name", "")
+    return str(name).lower()
+
+
+def owned(doc):
+    """True when this process opened or created the document."""
+    return _doc_key(doc) in _OWNED
+
+
+def open_doc(host, path, visible=True):
+    """Open a file and remember we opened it, so close_doc may close it later.
+
+    Use this instead of app.Documents.Open(...) — the raw call works, but then
+    the document is indistinguishable from one the user had open, and
+    close_doc will refuse it.
+    """
+    if not os.path.isfile(path):
+        raise OfficeError(f"no such file: {path}",
+                          "give an absolute path to an existing file")
+    app = get_app(host)
+    coll = collection(app, host)
+    doc = coll.Open(path)
+    try:
+        app.Visible = visible
+    except Exception:
+        pass
+    _OWNED.add(_doc_key(doc))
+    return app, doc
+
+
+def new_doc(host, visible=True):
+    """Create an empty document and mark it ours, so save_as may write it."""
+    app = get_app(host)
+    coll = collection(app, host)
+    doc = coll.Add() if host != "ppt" else coll.Add(WithWindow=visible)
+    try:
+        app.Visible = visible
+    except Exception:
+        pass
+    _OWNED.add(_doc_key(doc))
+    return app, doc
+
+
+def save_as(doc, path):
+    """Write a document WE opened or created to `path`.
+
+    Refused for the user's own documents: redirecting where their file saves is
+    exactly the silent overwrite the guard exists to prevent.
+    """
+    if not owned(doc):
+        raise OfficeError(
+            "save_as refused: this document was already open before we "
+            "started",
+            "SaveAs on the user's own document can silently overwrite another "
+            "file. Save in place instead, or ask the user.")
+    old = _doc_key(doc)
+    doc.SaveAs(os.path.abspath(path))
+    _OWNED.discard(old)
+    _OWNED.add(_doc_key(doc))
+    return doc.FullName
+
+
+def close_doc(doc, save=False):
+    """Close a document WE opened or created. The user's stay open."""
+    if not owned(doc):
+        raise OfficeError(
+            "close_doc refused: this document was already open before we "
+            "started",
+            "closing the user's document is their call; leave it open and say "
+            "you are done with it")
+    key = _doc_key(doc)
+    doc.Close(-1 if save else 0)        # wdSaveChanges / wdDoNotSaveChanges
+    _OWNED.discard(key)
+    return {"closed": key, "saved": bool(save)}
+
+
 # ------------------------------------------------- discovery & verification ---
 #
 # These two exist because the agent WRITES THE SCRIPT. A recipe list can only
@@ -1137,8 +1233,12 @@ FORBIDDEN = [
     (r"\bRejectAll(Revisions)?\b", "rejecting revisions erases the review trail"),
     (r"\.Accept\(\)", "accepting a revision is the human reviewer's call"),
     (r"\.Reject\(\)", "rejecting a revision is the human reviewer's call"),
-    (r"\bSaveAs2?\b", "SaveAs can silently overwrite another file"),
-    (r"\.Close\(", "closing documents is the user's call"),
+    (r"\bSaveAs2?\b",
+     "raw SaveAs can silently overwrite another file - use save_as(doc, path), "
+     "which allows it for documents this session opened or created"),
+    (r"\.Close\(",
+     "raw Close would also close the user's documents - use close_doc(doc), "
+     "which allows it for documents this session opened or created"),
     (r"\bQuit\(", "quitting the application is the user's call"),
     (r"TrackRevisions\s*=\s*(False|0)", "never turn revision tracking off"),
     (r"DisplayAlerts\s*=", "suppressing Office alerts hides destructive prompts"),
@@ -1185,7 +1285,8 @@ def _seed(ns):
                "explore": explore, "probe": probe, "replace_all": replace_all,
                "count_text": count_text, "stories": stories,
                "final_text": final_text, "text_chunks": text_chunks,
-               "doc_kind": doc_kind})
+               "doc_kind": doc_kind, "open_doc": open_doc, "new_doc": new_doc,
+               "save_as": save_as, "close_doc": close_doc, "owned": owned})
 
 
 def _describe_exception(e):

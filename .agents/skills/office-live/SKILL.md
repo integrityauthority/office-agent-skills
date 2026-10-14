@@ -52,6 +52,30 @@ f.Execute(Replace=2)               # 2 = wdReplaceAll
 print(doc.Content.Text[-300:])     # verify in the SAME call
 ```
 
+## Files you open yourself
+
+`attach()` works on what the user already has open. To work on a file that is
+closed, open it through the skill so it can be closed again afterwards:
+
+```python
+app, wb = open_doc("excel", r"C:\...\jelentes.xlsx")   # tracked as ours
+...read or edit...
+close_doc(wb)                     # allowed: we opened it
+
+app, wb = new_doc("excel")        # create from scratch
+save_as(wb, r"C:\...\uj.xlsx")   # allowed: we created it
+close_doc(wb)
+```
+
+`close_doc` and `save_as` **refuse the user's own documents** — closing their
+window or redirecting where their file saves is their call, not yours. Raw
+`doc.Close(...)` and `doc.SaveAs(...)` stay blocked for everything, because a
+regex cannot tell whose document it is; the refusal names the helper to use.
+
+`openpyxl` is available here too, for reading or writing a closed workbook
+without opening Excel at all. Prefer it when the file does not need to be
+visible: it is roughly seventy times faster than COM.
+
 **Never drive Office with hand-written `win32com.client.GetActiveObject(...)`.**
 That skips the early-binding repair, the tracked-changes verification and the
 AutoRecovery guard documented below — every one of which exists because the

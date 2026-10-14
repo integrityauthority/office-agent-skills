@@ -21,3 +21,7 @@ provides_tools:
 # rather than on the first tool call.
 python_dependencies:
   - pywin32
+  # The plugin runs in its own environment, so office_exec could not read or
+  # write a CLOSED workbook without this: the agent hit "No module named
+  # 'openpyxl'" mid-task and fell back to writing its own scripts elsewhere.
+  - openpyxl
