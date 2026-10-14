@@ -47,7 +47,11 @@ from office import OfficeError
 # Outlook constants (OlItemType / OlDefaultFolders / OlObjectClass).
 OL_MAIL, OL_APPOINTMENT, OL_CONTACT = 0, 1, 2
 CLASS_MAIL, CLASS_MEETING_REQUEST = 43, 53
-KINDS = {43: "mail", 45: "post", 46: "report", 49: "task_request",
+CLASS_APPOINTMENT, CLASS_CONTACT = 26, 40
+_READBACK_CLASSES = (CLASS_MAIL, CLASS_MEETING_REQUEST, CLASS_APPOINTMENT,
+                     CLASS_CONTACT)
+KINDS = {26: "appointment", 40: "contact",
+         43: "mail", 45: "post", 46: "report", 49: "task_request",
          53: "meeting_request", 54: "meeting_cancellation",
          55: "meeting_declined", 56: "meeting_accepted",
          57: "meeting_tentative"}
@@ -140,6 +144,16 @@ class _Guarded:
         return True
 
     def __repr__(self):
+        # A mail, meeting or contact prints as its readback, so a snippet that
+        # ends with the item it just composed already shows the proof — the
+        # model does not hand-write COM reads to verify (and guess property
+        # names like `Recipients.Account`, which is what it did before).
+        try:
+            if object.__getattribute__(self, "_o").Class in _READBACK_CLASSES:
+                import json
+                return json.dumps(readback(self), ensure_ascii=False, default=str)
+        except Exception:
+            pass
         return f"<guarded {object.__getattribute__(self, '_o')!r}>"
 
 
@@ -149,12 +163,20 @@ def _raw_app():
     w = office._win32()
     try:
         raw = w.GetActiveObject("Outlook.Application")
-    except Exception:
+    except Exception as e:
+        code = getattr(e, "hresult", None) or (e.args[0] if e.args else None)
+        if code == office._MK_E_UNAVAILABLE:
+            raise OfficeError(
+                "classic Outlook is not running",
+                "Ask the user to open Outlook. Only classic Outlook "
+                "(OUTLOOK.EXE) can be driven; the new Outlook (olk.exe) has no "
+                "COM interface. Never start Outlook on your own initiative.")
+        # Anything else is NOT "not running" — saying so sent the agent off
+        # asking the user to open an Outlook that was open all along.
         raise OfficeError(
-            "classic Outlook is not running",
-            "Ask the user to open Outlook. Only classic Outlook (OUTLOOK.EXE) "
-            "can be driven; the new Outlook (olk.exe) has no COM interface. "
-            "Never start Outlook on your own initiative.")
+            f"could not attach to Outlook: {e}",
+            "Outlook is probably running but busy or showing a dialog; ask "
+            "the user to check it, then call office_reset and retry once.")
     return office._early_bind(w, raw)
 
 
@@ -252,6 +274,61 @@ def summary(item):
         out["attachments"] = [a.FileName for a in raw.Attachments]
     except Exception:
         pass
+    return out
+
+
+def _recipients_readback(raw):
+    """Every recipient with its resolved SMTP address. Recipients is a
+    collection: 1-based .Item(i), never an attribute like `.Account`."""
+    kinds = ({1: "required", 2: "optional", 3: "resource"}
+             if raw.Class == CLASS_APPOINTMENT else {1: "to", 2: "cc", 3: "bcc"})
+    out = []
+    for i in range(1, raw.Recipients.Count + 1):
+        r = raw.Recipients.Item(i)
+        email = None
+        try:
+            user = r.AddressEntry.GetExchangeUser() if r.AddressEntry else None
+            email = user.PrimarySmtpAddress if user else r.Address
+        except Exception:
+            email = getattr(r, "Address", None)
+        out.append({"type": kinds.get(r.Type, r.Type), "name": r.Name,
+                    "email": email, "resolved": bool(r.Resolved)})
+    return out
+
+
+def readback(item, chars=300):
+    """Proof of what an item actually contains — the verification step, done.
+
+    For a composed mail: recipients resolved to SMTP addresses (and any that
+    did NOT resolve), subject, attachments, the start of the text, and whether
+    it has been sent or saved (it never is, from here). For an appointment:
+    times, location and attendees; for a contact: name and address. Ending a
+    snippet with the item prints this automatically.
+    """
+    raw = _unwrap(item)
+    cls = raw.Class
+    out = {"kind": KINDS.get(cls, f"class {cls}")}
+    if cls == CLASS_CONTACT:
+        out.update(name=raw.FullName, email=raw.Email1Address,
+                   company=raw.CompanyName)
+        return out
+    out["subject"] = raw.Subject
+    recipients = _recipients_readback(raw)
+    out["recipients"] = recipients
+    out["unresolved"] = [r["name"] for r in recipients if not r["resolved"]]
+    if cls == CLASS_APPOINTMENT:
+        out.update(start=_iso(raw.Start), end=_iso(raw.End),
+                   location=raw.Location,
+                   meeting=raw.MeetingStatus == 1)
+    else:
+        out["attachments"] = [a.FileName for a in raw.Attachments]
+        try:
+            out["sent"] = bool(raw.Sent)
+        except Exception:
+            pass
+    body = (raw.Body or "").strip()
+    out["text_start"] = body[:chars]
+    out["text_chars"] = len(body)
     return out
 
 

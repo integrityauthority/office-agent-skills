@@ -1405,7 +1405,7 @@ def _seed(ns):
         "find_mail", "get_mail", "open_item", "current_mail", "summary",
         "new_mail", "reply", "forward", "add_attachment", "folder",
         "calendar", "new_appointment", "resolve", "find_contact",
-        "new_contact", "outlook_status")})
+        "new_contact", "outlook_status", "readback")})
 
 
 def _describe_exception(e):

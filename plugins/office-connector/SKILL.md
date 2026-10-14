@@ -440,6 +440,7 @@ reply(entry_id, body="Köszönöm, megnézem.")      # text goes ABOVE the quote
 reply(entry_id, html="...", reply_all=True)
 forward(entry_id, to="x@pelda.hu", body="Továbbítom.")
 add_attachment(item, r"C:\...\melleklet.docx")
+readback(item)                                   # what it really contains
 
 # calendar — read freely, compose meetings for the user to send
 calendar(days=7)                                 # recurring meetings expanded
@@ -457,10 +458,28 @@ tables, links. Outlook's default font is applied around it, and when the item
 is displayed the user's own signature is kept, with your text above it
 (verified live). `body=` takes plain text; blank lines become paragraphs.
 
+**Verification is built in — do not write it yourself.** End the snippet with
+the item and it prints its readback: every recipient with the SMTP address it
+resolved to, `unresolved` names, attachments, the start of the text, and
+`sent: false`. `readback(item)` returns the same as a dict. One call composes
+AND proves:
+
+```python
+m = new_mail(to="Lovas Dóra", subject="...", html="...", attachments=[...])
+m        # -> {"recipients": [{"name": "Lovas Dóra dr.", "email": "dora.lovas@...",
+         #     "resolved": true}], "unresolved": [], "attachments": [...], ...}
+```
+
+Do not read Outlook properties by hand to check a draft — an agent did, guessed
+`Recipients.Account` (no such thing; Recipients is a collection) and spent a
+turn on the error.
+
 Things that will bite:
 
-- **Resolve people first.** `to="Kovács"` may resolve to the wrong Kovács or
-  not at all. `resolve()` it, and if two people match, ask.
+- **Names are fine in `to=` — check what they resolved to.** The readback shows
+  the address each name landed on. If `unresolved` is not empty, or an address
+  is not the person the user meant (two Kovácses), say so and ask; do not
+  guess. `resolve(name)` is there when you need the address before composing.
 - **Outlook collections are not callable**: `item.Recipients.Item(1)`, not
   `item.Recipients(1)` (TypeError under early binding).
 - **Searching by e-mail address**: for an Exchange sender the plain
