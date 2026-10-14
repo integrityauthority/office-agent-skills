@@ -96,8 +96,25 @@ def register(ctx):
         """Any Microsoft Graph GET. Writes are refused inside the module."""
         return json.dumps(mg.graph("GET", path, params=params), ensure_ascii=False, default=str)
 
+    # Same contract as every Hermes plugin tool: handler(args_dict, **context).
+    # The typed functions above stay the implementation; these unpack for the
+    # dispatcher.
+    def _status(args=None, **_):
+        return m365_status()
+
+    def _login(args=None, **_):
+        return m365_login()
+
+    def _search(args=None, **_):
+        a = args or {}
+        return m365_search(a.get("query", ""), a.get("types", ""), a.get("top", 15))
+
+    def _get(args=None, **_):
+        a = args or {}
+        return m365_get(a.get("path", ""), a.get("params"))
+
     ctx.register_tool(
-        "m365_status", "m365", NO_ARGS_SCHEMA, m365_status,
+        "m365_status", "m365", NO_ARGS_SCHEMA, _status,
         description=(
             "Check whether the user is signed in to Microsoft 365 and which "
             "permissions were granted. Call this before the first search, so a "
@@ -107,7 +124,7 @@ def register(ctx):
     )
 
     ctx.register_tool(
-        "m365_login", "m365", NO_ARGS_SCHEMA, m365_login,
+        "m365_login", "m365", NO_ARGS_SCHEMA, _login,
         description=(
             "Sign in to Microsoft 365. Opens a browser window and needs the user "
             "present, so only call it when m365_status says they are not signed in."
@@ -116,7 +133,7 @@ def register(ctx):
     )
 
     ctx.register_tool(
-        "m365_search", "m365", SEARCH_SCHEMA, m365_search,
+        "m365_search", "m365", SEARCH_SCHEMA, _search,
         description=(
             "Search the signed-in user's own Outlook mail, OneDrive and "
             "SharePoint documents, Teams chats and calendar. Returns only what "
@@ -126,7 +143,7 @@ def register(ctx):
     )
 
     ctx.register_tool(
-        "m365_get", "m365", GET_SCHEMA, m365_get,
+        "m365_get", "m365", GET_SCHEMA, _get,
         description=(
             "Fetch any Microsoft Graph resource by path when the search tool is "
             "too blunt, for example /me/drive/recent or a specific message. "

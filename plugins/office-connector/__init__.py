@@ -52,8 +52,22 @@ def register(ctx):
     # here rather than lazily so the first tool call is as fast as the rest.
     office_kernel.start_com_worker()
 
+    # Hermes dispatches plugin tools as ``handler(args_dict, **context)``
+    # (tools/registry.py: ``entry.handler(args, **kwargs)``), so a handler must
+    # take the arguments dict positionally. Registering the typed functions
+    # directly made every call fail with "takes 0 positional arguments but 1
+    # was given" — and office_exec received a dict where it expected a string.
+    def _status(args=None, **_):
+        return office_kernel.office_status()
+
+    def _exec(args=None, **_):
+        return office_kernel.office_exec((args or {}).get("code", ""))
+
+    def _reset(args=None, **_):
+        return office_kernel.office_reset()
+
     ctx.register_tool(
-        "office_status", "office", NO_ARGS_SCHEMA, office_kernel.office_status,
+        "office_status", "office", NO_ARGS_SCHEMA, _status,
         description=(
             "List which Office applications are running and which documents are "
             "open: name, path, saved state, and for Word whether revision "
@@ -64,7 +78,7 @@ def register(ctx):
     )
 
     ctx.register_tool(
-        "office_exec", "office", EXEC_SCHEMA, office_kernel.office_exec,
+        "office_exec", "office", EXEC_SCHEMA, _exec,
         description=(
             "Run Python against the Word, Excel or PowerPoint document the user "
             "has open, over COM. Use for reading or changing a document in "
@@ -75,7 +89,7 @@ def register(ctx):
     )
 
     ctx.register_tool(
-        "office_reset", "office", NO_ARGS_SCHEMA, office_kernel.office_reset,
+        "office_reset", "office", NO_ARGS_SCHEMA, _reset,
         description=(
             "Drop every variable and COM reference held between calls. Use when "
             "Office was closed and reopened and calls start failing with stale "
