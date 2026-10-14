@@ -281,23 +281,57 @@ def owned(doc):
     return _doc_key(doc) in _OWNED
 
 
+def _show_app(app):
+    """Bring the application up if needed. Never the reverse.
+
+    open_doc/new_doc attach to the user's RUNNING instance, so an earlier
+    version that honoured visible=False by setting app.Visible = False hid the
+    user's entire Excel or Word — every workbook they had open — to keep one
+    background file out of sight. Visibility is per DOCUMENT now; the
+    application's own Visible is only ever raised, never lowered.
+    """
+    try:
+        if not app.Visible:
+            app.Visible = True
+    except Exception:
+        pass
+
+
+def _set_window_visible(doc, visible):
+    try:
+        doc.Windows(1).Visible = visible
+    except Exception:
+        pass
+
+
 def open_doc(host, path, visible=True):
     """Open a file and remember we opened it, so close_doc may close it later.
 
-    Use this instead of app.Documents.Open(...) — the raw call works, but then
-    the document is indistinguishable from one the user had open, and
-    close_doc will refuse it.
+    visible=False keeps the DOCUMENT out of sight (Word: an invisible document,
+    PowerPoint: no window, Excel: a hidden workbook window). The application
+    itself is never hidden. For merely reading a closed .xlsx, openpyxl is the
+    better tool — no window at all, and about seventy times faster.
+
+    Use this instead of the raw Documents.Open(...): the raw call works, but
+    the document is then indistinguishable from one the user had open, and
+    close_doc will rightly refuse it.
     """
+    path = os.path.abspath(path)
     if not os.path.isfile(path):
         raise OfficeError(f"no such file: {path}",
                           "give an absolute path to an existing file")
     app = get_app(host)
     coll = collection(app, host)
-    doc = coll.Open(path)
-    try:
-        app.Visible = visible
-    except Exception:
-        pass
+    if host == "word":
+        doc = coll.Open(FileName=path, Visible=visible)
+    elif host == "ppt":
+        doc = coll.Open(FileName=path, WithWindow=visible)
+    else:
+        doc = coll.Open(Filename=path)
+        if not visible:
+            _set_window_visible(doc, False)
+    if visible:
+        _show_app(app)
     _OWNED.add(_doc_key(doc))
     return app, doc
 
@@ -306,20 +340,34 @@ def new_doc(host, visible=True):
     """Create an empty document and mark it ours, so save_as may write it."""
     app = get_app(host)
     coll = collection(app, host)
-    doc = coll.Add() if host != "ppt" else coll.Add(WithWindow=visible)
-    try:
-        app.Visible = visible
-    except Exception:
-        pass
+    if host == "word":
+        doc = coll.Add(Visible=visible)
+    elif host == "ppt":
+        doc = coll.Add(WithWindow=visible)
+    else:
+        doc = coll.Add()
+        if not visible:
+            _set_window_visible(doc, False)
+    if visible:
+        _show_app(app)
     _OWNED.add(_doc_key(doc))
     return app, doc
 
 
+def _unhide_before_save(doc):
+    """Excel stores window visibility IN the file: a workbook saved while its
+    window is hidden reopens hidden for the user next time, looking empty."""
+    if doc_kind(doc) == "excel":
+        _set_window_visible(doc, True)
+
+
 def save_as(doc, path):
-    """Write a document WE opened or created to `path`.
+    """Write a document WE opened or created to a NEW path.
 
     Refused for the user's own documents: redirecting where their file saves is
-    exactly the silent overwrite the guard exists to prevent.
+    exactly the silent overwrite the guard exists to prevent. Refused when the
+    target exists, too — Excel answers that with a modal "replace?" dialog,
+    which over COM is a hang, not a question.
     """
     if not owned(doc):
         raise OfficeError(
@@ -327,8 +375,14 @@ def save_as(doc, path):
             "started",
             "SaveAs on the user's own document can silently overwrite another "
             "file. Save in place instead, or ask the user.")
+    path = os.path.abspath(path)
+    if os.path.exists(path):
+        raise OfficeError(
+            f"save_as refused: {path} already exists",
+            "pick a new file name, or ask the user before replacing anything")
+    _unhide_before_save(doc)
     old = _doc_key(doc)
-    doc.SaveAs(os.path.abspath(path))
+    doc.SaveAs(path)
     _OWNED.discard(old)
     _OWNED.add(_doc_key(doc))
     return doc.FullName
@@ -343,7 +397,18 @@ def close_doc(doc, save=False):
             "closing the user's document is their call; leave it open and say "
             "you are done with it")
     key = _doc_key(doc)
-    doc.Close(-1 if save else 0)        # wdSaveChanges / wdDoNotSaveChanges
+    kind = doc_kind(doc)
+    if save:
+        _unhide_before_save(doc)
+    if kind == "ppt":
+        # Presentation.Close() takes no arguments at all; saving is separate.
+        if save:
+            doc.Save()
+        doc.Close()
+    else:
+        # Word: 0 = wdDoNotSaveChanges, -1 = wdSaveChanges. Excel: a bool.
+        # Named, because positional COM arguments have bitten us before.
+        doc.Close(SaveChanges=(-1 if save else 0))
     _OWNED.discard(key)
     return {"closed": key, "saved": bool(save)}
 

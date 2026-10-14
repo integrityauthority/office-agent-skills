@@ -72,6 +72,8 @@ window or redirecting where their file saves is their call, not yours. Raw
 `doc.Close(...)` and `doc.SaveAs(...)` stay blocked for everything, because a
 regex cannot tell whose document it is; the refusal names the helper to use.
 
+`visible=False` hides the *document*, never the application — the user's other windows stay put. `save_as` refuses an existing target (Excel would answer with a modal dialog, which over COM is a hang).
+
 `openpyxl` is available here too, for reading or writing a closed workbook
 without opening Excel at all. Prefer it when the file does not need to be
 visible: it is roughly seventy times faster than COM.
@@ -441,6 +443,12 @@ edits must land as reviewable revisions. For a long interactive session, use
   agent asked to make one edit called `AcceptAll()` first, erasing four
   revisions that were waiting for human review. Review decisions belong to the
   user; you only add.
+- **Never present a file built another way as live work.** If you produced the
+  result with openpyxl or python-docx instead of in the open document, say so
+  plainly. Hermes recorded this lesson itself after a session that generated a
+  new workbook while the user had asked for the open one — it tried to write
+  it here, could not (plugin skills are read-only to the curator), and put it
+  in the `xlsx` skill instead.
 - Never `Close()`, `SaveAs`, or `Quit`. Saving in place after a confirmed edit
   is fine; closing and deleting are not.
 - Never disable `TrackRevisions` or `DisplayAlerts` to make something succeed.
