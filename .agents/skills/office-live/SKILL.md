@@ -17,9 +17,26 @@ there, so there is nothing to set up.
 
 ## How to call it
 
-**Default: write Python in `execute_code` and import the module.** One tool
-call does read → modify → verify. This is the fastest and most reliable path;
-use it unless you need state across calls.
+**If the `office_exec` tool exists, use it — do not write your own
+`win32com` code.** It runs the snippet against one COM connection kept warm
+for the whole session, and the Python namespace **persists between calls**, so
+you attach once and keep the variables:
+
+```
+office_status()                      # what is open; call this first
+office_exec("app, doc = attach('word')")
+office_exec("doc.TrackRevisions = True; doc.Paragraphs.Count")
+office_exec("doc.Content.Text[-300:]")      # verify by reading back
+office_reset()                       # only after Office was closed and reopened
+```
+
+`office_exec` returns the value of the last expression, plus anything you
+`print()`. Everything in the recipes below works inside it unchanged.
+
+**Only if those tools are absent** — this skill also ships standalone, without
+the plugin — write Python in `execute_code` and import the module instead.
+Same functions, but the namespace does not survive between calls, so do the
+whole read → modify → verify in one snippet:
 
 ```python
 import sys
@@ -34,6 +51,11 @@ f.Text, f.Replacement.Text = "régi szöveg", "új szöveg"
 f.Execute(Replace=2)               # 2 = wdReplaceAll
 print(doc.Content.Text[-300:])     # verify in the SAME call
 ```
+
+**Never drive Office with hand-written `win32com.client.GetActiveObject(...)`.**
+That skips the early-binding repair, the tracked-changes verification and the
+AutoRecovery guard documented below — every one of which exists because the
+naive version silently did the wrong thing.
 
 `attach(host, name=None)` returns `(app, doc)` and raises `OfficeError` with an
 actionable `.hint`. From there you have the whole COM object model — write COM
