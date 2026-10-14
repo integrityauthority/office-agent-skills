@@ -1,0 +1,16 @@
+# Line endings, pinned.
+#
+# Everything in this repository is already stored as LF. This file keeps it
+# that way regardless of a contributor's `core.autocrlf`, because
+# tools/sync_plugins.py --check compares a skill against its plugin copy
+# byte-for-byte (filecmp, shallow=False). Both copies always live in the same
+# checkout, so today they match either way — but a contributor who commits
+# CRLF for one of them and LF for the other would break that check, and the
+# failure would read as content drift when it is only line endings.
+* text=auto
+*.py   text eol=lf
+*.md   text eol=lf
+*.yaml text eol=lf
+*.yml  text eol=lf
+*.json text eol=lf
+*.ps1  text eol=crlf
