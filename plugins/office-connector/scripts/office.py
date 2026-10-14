@@ -76,13 +76,62 @@ def attach(host, name=None, launch=False):
     return app, pick(app, host, name)
 
 
+def _pywin32_paths():
+    """The directories pywin32's .pth would have added, found without importing.
+
+    pywin32 ships a .pth that puts ``win32``, ``win32\\lib`` and ``Pythonwin``
+    on sys.path. Python only honours a .pth through the ``site`` module, so an
+    interpreter started isolated (``-S`` / ``-I``, which some sandboxes use)
+    skips it. The failure that causes is confusing: ``import pythoncom``
+    SUCCEEDS, because pythoncom.py sits in site-packages itself, and then its
+    very first line — ``import pywintypes`` — raises ModuleNotFoundError,
+    because pywintypes lives in ``win32\\lib``.
+
+    find_spec locates the package without executing it, which matters: we
+    cannot import win32com to ask where it is, since that import is the one
+    blowing up.
+    """
+    import importlib.util
+    try:
+        spec = importlib.util.find_spec("win32com")
+    except (ImportError, ValueError):
+        return []
+    if not spec or not spec.origin:
+        return []
+    site_packages = os.path.dirname(os.path.dirname(spec.origin))
+    found = []
+    for sub in ("win32", os.path.join("win32", "lib"), "Pythonwin"):
+        candidate = os.path.join(site_packages, sub)
+        if os.path.isdir(candidate):
+            found.append(candidate)
+    return found
+
+
 def _win32():
     try:
         import win32com.client  # noqa
         return win32com.client
-    except ImportError:
+    except ImportError as first:
+        # Repair the sys.path the .pth should have set up, then retry once.
+        missing = [p for p in _pywin32_paths() if p not in sys.path]
+        if missing:
+            sys.path.extend(missing)
+            try:
+                import win32com.client  # noqa
+                return win32com.client
+            except ImportError as second:
+                first = second
+        installed = bool(_pywin32_paths())
+        if installed:
+            raise OfficeError(
+                f"pywin32 is installed but could not be imported: {first}",
+                "This interpreter skipped pywin32's .pth file (typical of an "
+                "isolated run), so site-packages\\win32\\lib was not on "
+                "sys.path. That is repaired automatically, so if you are "
+                "reading this the install itself is broken — reinstall "
+                "pywin32 into the interpreter that is running this script.")
         raise OfficeError(
-            "pywin32 is not installed",
+            f"pywin32 is not installed: {first}",
             "COM needs native Windows Python in the user's interactive "
             "session. If this is WSL or a container, the COM route is not "
             "available at all — say so instead of retrying.")
