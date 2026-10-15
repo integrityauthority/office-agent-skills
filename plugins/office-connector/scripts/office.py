@@ -72,15 +72,39 @@ def com_date(value):
     return value.replace(tzinfo=_dt.timezone.utc)
 
 
+def _prefer_note():
+    """Steer an agent inside Hermes back to the plugin's tools.
+
+    Hermes hands HERMES_HOME to every terminal command. When that is set and
+    the office-connector plugin is installed, an agent calling this CLI through
+    `terminal` has skipped office_exec — usually because a shell recipe was the
+    first thing it saw. The command still runs (the CLI is the fallback for
+    agents without the plugin), but the answer says where to go next.
+    """
+    home = os.environ.get("HERMES_HOME", "").strip()
+    if not home or not os.path.isdir(os.path.join(home, "plugins", "office-connector")):
+        return None
+    return ("you are inside Hermes with the office-connector plugin: use the "
+            "office_exec / office_status tools instead of running office.py "
+            "through the terminal - same helpers, one warm COM connection, a "
+            "namespace that persists between calls")
+
+
+def emit(payload, code=0):
+    """Print exactly one JSON object and exit — every CLI answer goes here."""
+    note = _prefer_note()
+    if note:
+        payload = dict(payload, prefer=note)
+    print(json.dumps(payload, ensure_ascii=False))
+    sys.exit(code)
+
+
 def out(data):
-    print(json.dumps({"ok": True, "data": data}, ensure_ascii=False))
-    sys.exit(0)
+    emit({"ok": True, "data": data})
 
 
 def fail(error, hint=""):
-    print(json.dumps({"ok": False, "error": str(error), "hint": hint},
-                     ensure_ascii=False))
-    sys.exit(1)
+    emit({"ok": False, "error": str(error), "hint": hint}, 1)
 
 
 def attach(host, name=None, launch=False):
@@ -1235,26 +1259,38 @@ def cmd_ppt_outline(a):
 
 # ---------------------------------------------------------------- backup ---
 
-def cmd_backup(a):
-    doc = pick(get_app(a.host), a.host, a.name)
+def backup(doc):
+    """Copy the document's file next to itself as name.bak-<timestamp>.ext.
+
+    A library function so the safety protocol's first write step works inside
+    office_exec. It used to exist only as the CLI command, which sent agents
+    out to the terminal for the backup and they then stayed there for the edit
+    too.
+    """
     path = doc.FullName
     # Order matters: a SharePoint URL is neither absolute nor local, so it has
     # to be recognised before the "never saved" check claims it.
     if path.lower().startswith("http"):
-        fail("the document lives on SharePoint/OneDrive, not a local path",
-             f"FullName is {path!r}. A file copy is not possible; rely on "
-             "version history there, or ask the user to save a local copy.")
+        raise OfficeError(
+            "the document lives on SharePoint/OneDrive, not a local path",
+            f"FullName is {path!r}. A file copy is not possible; rely on "
+            "version history there, or ask the user to save a local copy.")
     if not path or not os.path.splitext(path)[1] or not os.path.isabs(path):
-        fail("this document has never been saved to disk",
-             "Ask the user to save it once first. Do not edit an "
-             "unbacked-up document.")
+        raise OfficeError(
+            "this document has never been saved to disk",
+            "Ask the user to save it once first. Do not edit an "
+            "unbacked-up document.")
     if not doc.Saved:
         doc.Save()
     stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     root, ext = os.path.splitext(path)
     dest = f"{root}.bak-{stamp}{ext}"
     shutil.copy2(path, dest)
-    out({"document": doc.Name, "source": path, "backup": dest})
+    return {"document": doc.Name, "source": path, "backup": dest}
+
+
+def cmd_backup(a):
+    out(backup(pick(get_app(a.host), a.host, a.name)))
 
 
 # ------------------------------------------------------------------ exec ---
@@ -1272,13 +1308,11 @@ def cmd_exec(a):
         # Warm path: the daemon owns the namespace, so `attach` is preloaded
         # and any variable defined here survives into the next call.
         resp = daemon_request({"op": "exec", "code": source})
-        print(json.dumps(resp, ensure_ascii=False))
-        sys.exit(0 if resp.get("ok") else 1)
+        emit(resp, 0 if resp.get("ok") else 1)
 
     refusal = refuse(source)
     if refusal:
-        print(json.dumps(refusal, ensure_ascii=False))
-        sys.exit(1)
+        emit(refusal, 1)
 
     app = get_app(a.host, launch=a.launch)
     doc = None
@@ -1399,7 +1433,7 @@ def _seed(ns):
                "final_text": final_text, "text_chunks": text_chunks,
                "doc_kind": doc_kind, "open_doc": open_doc, "new_doc": new_doc,
                "save_as": save_as, "close_doc": close_doc, "owned": owned,
-               "status": status, "com_date": com_date})
+               "status": status, "com_date": com_date, "backup": backup})
     import outlook
     ns.update({name: getattr(outlook, name) for name in (
         "find_mail", "get_mail", "open_item", "current_mail", "summary",
@@ -1591,8 +1625,7 @@ def cmd_daemon_op(a):
     if a.cmd == "reset" and resp.get("ok"):
         # Bring the replacement up now so the next real call is warm.
         daemon_request({"op": "ping"})
-    print(json.dumps(resp, ensure_ascii=False))
-    sys.exit(0 if resp.get("ok") else 1)
+    emit(resp, 0 if resp.get("ok") else 1)
 
 
 # ------------------------------------------------------------------- cli ---

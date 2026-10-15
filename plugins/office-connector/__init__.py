@@ -81,8 +81,11 @@ def register(ctx):
     ctx.register_tool(
         "office_exec", "office", EXEC_SCHEMA, _exec,
         description=(
-            "Run Python against the user's running Office over COM: the open "
-            "Word, Excel or PowerPoint document, and classic Outlook — search "
+            # The tool-search catalogue shows only the first sentence, cut at 60
+            # characters, so it has to stand on its own.
+            "Work live in the user's open Word, Excel, PowerPoint, Outlook. "
+            "Runs Python against the running Office over COM: the open "
+            "document, and classic Outlook — search "
             "mail, read messages, compose new mail, replies and forwards with "
             "attachments and formatting, calendar and contacts. Outlook items "
             "are composed and opened for the user; sending and saving are "

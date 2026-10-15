@@ -17,10 +17,18 @@ there, so there is nothing to set up.
 
 ## How to call it
 
-**If the `office_exec` tool exists, use it — do not write your own
-`win32com` code.** It runs the snippet against one COM connection kept warm
-for the whole session, and the Python namespace **persists between calls**, so
-you attach once and keep the variables:
+**In Hermes, use the `office_status` and `office_exec` tools — nothing else.**
+They may sit in the tool-search catalogue rather than your visible tool list;
+if so, `tool_describe("office_exec")` once and then call it. Do **not** run
+`office.py` through `terminal`, and do not write your own `win32com` code in
+`execute_code`: both skip the warm connection, the persistent namespace and
+the plugin's guard. (The command line exists for agents without the plugin —
+see the last section — and when it detects Hermes it tells you to come back
+here.)
+
+`office_exec` runs the snippet against one COM connection kept warm for the
+whole session, and the Python namespace **persists between calls**, so you
+attach once and keep the variables:
 
 ```
 office_status()                      # what is open; call this first
@@ -214,35 +222,10 @@ print({"touched": touched, "changed": before["sha"] != after["sha"],
        "revisions": (before["revisions"], after["revisions"])})
 ```
 
-**When you need state across calls** (long sessions, or you are an agent that
-can only run shell commands), use the warm daemon. Variables survive between
-calls like a notebook; it auto-starts and exits after 45 idle minutes:
-
-```
-office.py exec --warm --code "app, doc = attach('word'); doc.Name"
-office.py exec --warm --code "doc.Revisions.Count"        # doc is still there
-office.py reset      # drop variables / stale COM refs after Office restarts
-```
-
-**Typed commands, for quick reads** (cold, ~0.5 s each):
-
-```
-office.py status                                   # all three apps at once
-office.py word structure | text | selection | revisions
-office.py excel sheets | read --range "Adatok!A1:D50" [--formulas]
-office.py excel write --range "Adatok!B2" --values "[[1,2],[3,4]]"
-office.py ppt outline
-office.py backup --host word
-```
-
-Shorthand above: `office.py` = `%LOCALAPPDATA%\hermes\hermes-agent\venv\Scripts\python.exe ${HERMES_SKILL_DIR}/scripts/office.py`.
-**Never wrap it in `subprocess.run` inside `execute_code`** — that is ten lines
-of boilerplate to do what `attach()` does in two.
-
 ## Preflight — always first
 
 ```
-office.py status
+office_status()                 # or, inside a snippet: status()
 ```
 
 Reports for each app: running or not, which documents are open, saved state,
@@ -292,7 +275,7 @@ A never-saved document is **not** this case and carries no flag. Edit it.
 ## Safety protocol
 
 1. `status` — confirm you are on the right document.
-2. `office.py backup --host <word|excel|ppt>` — saves and copies the file as
+2. `backup(doc)` — saves and copies the file as
    `name.bak-<timestamp>.ext`. **Report the path.** When there is no file to
    copy — SharePoint/OneDrive, or a document that was never saved — this step
    simply does not apply. Say so and carry on; it is never a reason to refuse
@@ -515,8 +498,8 @@ whole job in one script, and never loop a COM call per paragraph.
 **Use python-docx instead when** the job is bulk rewriting, the file is local
 and closed (or can be), and nobody needs tracked revisions. **Use this skill
 when** the document is open in front of the user, lives on SharePoint, or the
-edits must land as reviewable revisions. For a long interactive session, use
-`exec --warm` so the attach cost is paid once.
+edits must land as reviewable revisions. `office_exec` keeps one COM
+connection warm for the whole session, so the attach cost is paid once.
 
 ## Failure modes
 
@@ -528,8 +511,9 @@ edits must land as reviewable revisions. For a long interactive session, use
 | Call returns `True` but nothing changed | dynamic-dispatch misbind | Use `attach()` (early binding). Always read back. |
 | Command hangs | modal dialog open in Office | Ask the user to dismiss it. Do not retry blindly. |
 | `Office rejected the call` | app busy mid-operation | Wait, retry once, then tell the user. |
-| Stale COM errors after reopening Office | daemon holds dead refs | `office.py reset`. |
-| `never been saved to disk` | the `backup` command on an untitled document | Nothing to back up. Make the edit and say it is still unsaved. |
+| Stale COM errors after reopening Office | the kernel holds dead refs | `office_reset()`. |
+| `never been saved to disk` | `backup()` on an untitled document | Nothing to back up. Make the edit and say it is still unsaved. |
+| A command-line answer carries `prefer` | you called `office.py` through `terminal` inside Hermes | Switch to `office_exec`; the same code runs there unchanged. |
 
 ## Boundaries
 
@@ -549,6 +533,31 @@ edits must land as reviewable revisions. For a long interactive session, use
   is fine; closing and deleting are not.
 - Never disable `TrackRevisions` or `DisplayAlerts` to make something succeed.
 
-The shell paths (`office.py exec`, `--warm`) refuse these calls outright. **The
-library path cannot** — once you hold the COM object, Python can call anything,
-so on that path these rules are enforced only by you following them.
+`office_exec` (and the command line) refuse these calls outright. **Importing
+the module in `execute_code` cannot** — once you hold the COM object, Python
+can call anything, so on that path these rules are enforced only by you
+following them. One more reason to stay on `office_exec`.
+
+## Without the Hermes plugin
+
+Only for agents that do not have the `office_exec` tool — another agent, or
+this skill installed standalone. Inside Hermes with the plugin, these answer
+with a `prefer` note pointing back to `office_exec`.
+
+Run with the interpreter that has pywin32:
+`%LOCALAPPDATA%\hermes\hermes-agent\venv\Scripts\python.exe ${HERMES_SKILL_DIR}/scripts/office.py`
+(shortened to `office.py` below).
+
+```
+office.py status                                   # all apps at once
+office.py word structure | text | selection | revisions
+office.py excel sheets | read --range "Adatok!A1:D50" [--formulas]
+office.py excel write --range "Adatok!B2" --values "[[1,2],[3,4]]"
+office.py ppt outline
+office.py backup --host word
+office.py exec --warm --code "app, doc = attach('word'); doc.Name"   # state persists
+office.py reset                                    # after Office restarts
+```
+
+The warm daemon starts itself and exits after 45 idle minutes. Never wrap the
+command in `subprocess.run` inside `execute_code` — import the module instead.
