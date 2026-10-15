@@ -83,7 +83,7 @@ def register(ctx):
         description=(
             # The tool-search catalogue shows only the first sentence, cut at 60
             # characters, so it has to stand on its own.
-            "Work live in the user's open Word, Excel, PowerPoint, Outlook. "
+            "Work live in open Word, Excel, PowerPoint and Outlook. "
             "Runs Python against the running Office over COM: the open "
             "document, and classic Outlook — search "
             "mail, read messages, compose new mail, replies and forwards with "
