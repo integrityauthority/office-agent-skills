@@ -184,7 +184,7 @@ def _msal():
             "the msal package is not installed",
             "Install it into the interpreter Hermes uses: "
             "'<hermes venv>\\Scripts\\python.exe -m pip install msal', or "
-            "re-run Setup-Hermes.ps1 which does it for you.")
+            "re-run Install-Hermes.ps1 which does it for you.")
 
 
 def client_id():
@@ -341,6 +341,118 @@ def _token(need_scope=None):
 
 # -------------------------------------------------------------------- http ---
 
+_MAX_FILE_BYTES = 30 * 1024 * 1024
+_TEXT_LIMIT = 60_000
+
+
+def _pdf_text(data, limit=_TEXT_LIMIT):
+    """Best-effort text from a PDF. pypdf when the interpreter has it, otherwise
+    the literal strings of FlateDecode streams. Returns "" when the file is a
+    scan or uses a font the fallback cannot decode."""
+    import io
+    import zlib
+
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(data))
+        parts = [(page.extract_text() or "") for page in reader.pages]
+        text = "\n".join(parts).strip()
+        if text:
+            return text[:limit]
+    except Exception:
+        pass
+
+    pieces = []
+    for match in re.finditer(rb"stream\r?\n", data):
+        end = data.find(b"endstream", match.end())
+        if end < 0:
+            continue
+        raw = data[match.end():end].rstrip(b"\r\n")
+        try:
+            raw = zlib.decompress(raw)
+        except zlib.error:
+            continue
+        for literal in re.finditer(rb"\(((?:\\.|[^\\)])*)\)", raw):
+            chunk = literal.group(1)
+            chunk = re.sub(rb"\\([0-7]{1,3})",
+                           lambda m: bytes([int(m.group(1), 8) & 0xFF]), chunk)
+            chunk = (chunk.replace(rb"\n", b"\n").replace(rb"\r", b"\r")
+                          .replace(rb"\t", b"\t").replace(rb"\(", b"(")
+                          .replace(rb"\)", b")").replace(rb"\\", b"\\"))
+            piece = chunk.decode("utf-8", "replace").strip()
+            if piece and "\ufffd" not in piece:
+                pieces.append(piece)
+    return "\n".join(pieces)[:limit]
+
+
+def _download_drive_content(path, timeout):
+    """GET a drive item's /content.
+
+    Graph answers with a redirect to a pre-authenticated SharePoint URL and
+    the body is the file itself, not JSON. The bearer token must not be sent
+    to that URL. Opening it in a browser fails: that session is not signed in.
+    """
+    import requests
+
+    token = _token()
+    url = GRAPH + path
+    response = requests.get(
+        url,
+        headers={"Authorization": f"Bearer {token}"},
+        allow_redirects=False,
+        timeout=timeout,
+    )
+    if response.status_code in (301, 302, 303, 307, 308):
+        location = response.headers.get("Location")
+        if not location:
+            raise GraphError("the content redirect had no Location header",
+                             "Read the item metadata again and retry /content.")
+        response = requests.get(location, timeout=timeout)
+    if response.status_code == 401:
+        raise GraphError("Microsoft Graph rejected the token (401)",
+                         "The token expired or was revoked. Sign in again.")
+    if response.status_code == 403:
+        raise GraphError(
+            f"Microsoft Graph denied the request (403): {response.text[:300]}",
+            "The signed-in user cannot read this file.")
+    if not response.ok:
+        raise GraphError(f"HTTP {response.status_code}: {response.text[:400]}")
+    data = response.content or b""
+    if len(data) > _MAX_FILE_BYTES:
+        raise GraphError(
+            f"the file is {len(data)} bytes, above the {_MAX_FILE_BYTES} byte cap",
+            "Read the metadata and ask the user for a smaller file.")
+
+    content_type = response.headers.get("Content-Type", "").split(";")[0].strip()
+    item = path[:-len("/content")].rstrip("/").rsplit("/", 1)[-1]
+    item = re.sub(r"[^A-Za-z0-9._-]", "_", item)[:80] or "file"
+    ext = ".pdf" if data.startswith(b"%PDF") or content_type == "application/pdf" else ""
+    folder = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")),
+                          "hermes", "cache", "m365")
+    os.makedirs(folder, exist_ok=True)
+    saved = os.path.join(folder, item + ext)
+    with open(saved, "wb") as fh:
+        fh.write(data)
+
+    text = _pdf_text(data) if ext == ".pdf" else ""
+    result = {
+        "saved_to": saved,
+        "content_type": content_type or ("application/pdf" if ext else "application/octet-stream"),
+        "size": len(data),
+    }
+    if text:
+        result["text"] = text
+        result["truncated"] = len(text) >= _TEXT_LIMIT
+    else:
+        result["text"] = ""
+        result["note"] = (
+            "The file is saved. Its text was not extracted here. "
+            "Read saved_to with the pdf skill. Do not open a SharePoint "
+            "or download URL in the browser, and do not call /preview."
+        )
+    return result
+
+
 def graph(method, path, *, params=None, body=None, allow_write=None,
           headers=None, timeout=60, all_pages=False, page_cap=10):
     """Call Microsoft Graph. Reads are open; writes must be named explicitly.
@@ -358,8 +470,17 @@ def graph(method, path, *, params=None, body=None, allow_write=None,
     import requests
 
     method = method.upper()
-    path = "/" + path.lstrip("/")
+    path = "/" + (path or "").lstrip("/")
     need = None
+    if method == "GET" and path == "/":
+        raise GraphError(
+            "refused: a Graph path is required",
+            "An empty path returns the API catalogue, not the user's files. "
+            "To list a folder, take the driveItem id from search and call "
+            "/me/drive/items/<id>/children. A folder in the user's own "
+            "OneDrive root is /me/drive/root:/Folder name:/children.")
+    if method == "GET" and path.rstrip("/").endswith("/content"):
+        return _download_drive_content(path, timeout)
 
     if method != "GET":
         if path == "/$batch":

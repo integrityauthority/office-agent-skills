@@ -8,6 +8,12 @@ platforms: [windows]
 
 # m365-graph
 
+To read or summarize a file in OneDrive or SharePoint, call `m365_get` with
+`/me/drive/items/<id>/content`. The result contains `text` for a PDF that has
+a text layer. Do not open the SharePoint link in the browser, and do not call
+`/preview`: the browser viewer does not expose the text layer, and `/preview`
+returns 403.
+
 Searches and reads Microsoft 365 through one file:
 `${HERMES_SKILL_DIR}/scripts/microsoft_graph.py`. The user signs in once in a
 browser window; after that every call is silent until the token is revoked.
@@ -32,7 +38,7 @@ Tells you whether anyone is signed in, as whom, and which scopes were granted.
 - **`signed_in: false`** → run `mg login`. It opens a real browser window;
   **the user has to be at the keyboard.** Say so before you start it, and
   never run it inside a scheduled job.
-- **`msal_installed: false`** → re-run `Setup-Hermes.ps1`, or
+- **`msal_installed: false`** → re-run `Install-Hermes.ps1`, or
   `python.exe -m pip install msal`.
 - **`token_error`** → the cached token died. `mg login` again.
 
@@ -103,6 +109,32 @@ mg get /me/joinedTeams
 mg get "/sites/root/drive/root/children" --param '$top=50'
 mg get /me/messages --param '$select=subject,receivedDateTime' --all
 ```
+
+Search finds a folder; it does not list what is inside it. After `search`
+returns a `driveItem` id, list that folder with `get`:
+
+```
+mg get /me/drive/items/<id-from-search>/children --param '$select=name,size,folder,file,webUrl'
+```
+
+A folder in the signed-in user's own OneDrive root can also be addressed by
+name: `/me/drive/root:/Accesible:/children`. Do not open the `webUrl` in a
+browser — that is a separate SharePoint sign-in and proves nothing about
+Graph. Never call `get` without a path: Graph answers with its API catalogue,
+which is not the user's files.
+
+The file itself, including a PDF, is the same item's `/content` path:
+
+```
+mg get /me/drive/items/<id>/content
+```
+
+The answer is JSON with `saved_to` and, when the PDF has a text layer,
+`text`. Summarize `text`. Do not call `/preview` and do not open
+`@microsoft.graph.downloadUrl` or the SharePoint `webUrl` in a browser:
+that session is not signed in, and the plugin would also misread the PDF
+bytes as JSON. `/content` follows the redirect without the Graph token,
+which is the only way the bytes come back.
 
 `get` reaches any Graph GET endpoint. Look the path up in the Microsoft Graph
 documentation when you need something not listed here — the whole read surface

@@ -273,8 +273,9 @@ def get_app(host, launch=False):
                 f"{prog} is not reachable over COM",
                 "Either the app is closed, or it is running with NO document "
                 "open — Office only registers itself once a document is "
-                "loaded. Ask the user to open the file. Do not pass --launch "
-                "on your own initiative.")
+                "loaded. If the user asked you to open Word or Excel, call "
+                "new_doc or open_doc with launch=True. Do not launch an app "
+                "they did not ask for.")
         raise OfficeError(f"could not attach to {prog}: {e}")
 
 
@@ -320,6 +321,11 @@ def pick(app, host, name=None):
 # opened or created; everything else stays the user's.
 
 _OWNED = set()
+# host -> key of the unsaved document new_doc created and a later snippet has
+# not successfully written yet. The next new_doc returns that document.
+_UNFINISHED = {}
+# hosts touched by new_doc during the snippet that is running now.
+_TOUCHED = set()
 
 
 def _doc_key(doc):
@@ -360,7 +366,7 @@ def _set_window_visible(doc, visible):
         pass
 
 
-def open_doc(host, path, visible=True):
+def open_doc(host, path, visible=True, launch=False):
     """Open a file and remember we opened it, so close_doc may close it later.
 
     visible=False keeps the DOCUMENT out of sight (Word: an invisible document,
@@ -376,7 +382,7 @@ def open_doc(host, path, visible=True):
     if not os.path.isfile(path):
         raise OfficeError(f"no such file: {path}",
                           "give an absolute path to an existing file")
-    app = get_app(host)
+    app = get_app(host, launch=launch)
     coll = collection(app, host)
     if host == "word":
         doc = coll.Open(FileName=path, Visible=visible)
@@ -392,9 +398,66 @@ def open_doc(host, path, visible=True):
     return app, doc
 
 
-def new_doc(host, visible=True):
-    """Create an empty document and mark it ours, so save_as may write it."""
-    app = get_app(host)
+def _unsaved(doc):
+    try:
+        return not doc.Path
+    except Exception:
+        return False
+
+
+def _open_by_key(app, host, key):
+    for doc in collection(app, host):
+        try:
+            if _doc_key(doc) == key and _unsaved(doc):
+                return doc
+        except Exception:
+            continue
+    return None
+
+
+def begin_exec():
+    """A snippet is starting. Forget which hosts it has called new_doc for."""
+    _TOUCHED.clear()
+
+
+def finish_exec(ok):
+    """A snippet ended. Success does not forget the unsaved document.
+
+    The model often opens Word in one call and writes the body in the next.
+    Releasing on that first success made the second new_doc open an empty
+    extra window. The document stays the one new_doc returns until it is
+    saved, closed, or the caller passes fresh=True.
+    """
+    _TOUCHED.clear()
+
+
+def new_doc(host, visible=True, launch=False, fresh=False):
+    """Create an empty document and mark it ours, so save_as may write it.
+
+    launch=True starts Word, Excel or PowerPoint when the user asked for it
+    and the application is not already running.
+
+    While that document is still unsaved, a later call returns it instead of
+    opening another window. This holds after a successful open too, not only
+    after an error. Pass fresh=True only when the user asked for a separate
+    additional document. A saved or closed document is not reused.
+    """
+    _TOUCHED.add(host)
+    app = get_app(host, launch=launch)
+    if not fresh:
+        key = _UNFINISHED.get(host)
+        existing = _open_by_key(app, host, key) if key else None
+        if existing is not None:
+            try:
+                existing.Activate()
+            except Exception:
+                pass
+            if visible:
+                _show_app(app)
+                _set_window_visible(existing, True)
+            return app, existing
+        if key:
+            _UNFINISHED.pop(host, None)
     coll = collection(app, host)
     if host == "word":
         doc = coll.Add(Visible=visible)
@@ -407,6 +470,7 @@ def new_doc(host, visible=True):
     if visible:
         _show_app(app)
     _OWNED.add(_doc_key(doc))
+    _UNFINISHED[host] = _doc_key(doc)
     return app, doc
 
 
@@ -1491,12 +1555,17 @@ def _handle(req, ns):
     if refusal:
         return refusal
     try:
-        return run_snippet(code, ns)
+        begin_exec()
+        result = run_snippet(code, ns)
+        finish_exec(True)
+        return result
     except SyntaxError as e:
+        finish_exec(False)
         return {"ok": False, "error": f"SyntaxError: {e}",
                 "hint": "send plain Python; the last expression's value is "
                         "returned automatically"}
     except Exception as e:
+        finish_exec(False)
         return _describe_exception(e)
 
 
