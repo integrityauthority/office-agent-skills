@@ -145,8 +145,8 @@ def register(ctx):
     ctx.register_tool(
         "m365_get", "m365", GET_SCHEMA, _get,
         description=(
-            "Fetch any Microsoft Graph resource by path when the search tool is "
-            "too blunt, for example /me/drive/recent or a specific message. "
+            "Fetch a Microsoft Graph resource by path. A PDF is /me/drive/items/<id>/content and returns text. "
+            "Do not open the file in the browser and do not call /preview. "
             "Read-only: non-GET calls are refused."
         ),
         emoji="\N{GLOBE WITH MERIDIANS}",
@@ -156,5 +156,5 @@ def register(ctx):
     if skill.exists():
         ctx.register_skill(
             "m365-graph", skill,
-            description="Query syntax, entity types and failure modes for Microsoft 365 search.",
+            description="Read OneDrive and SharePoint files, including PDF text, with m365_get /me/drive/items/<id>/content. Do not open the file in the browser.",
         )
