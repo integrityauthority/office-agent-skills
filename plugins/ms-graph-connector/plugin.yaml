@@ -21,7 +21,9 @@ provides_tools:
 python_dependencies:
   - msal
   - requests
-  - pypdf
+  - pdfminer.six
+  - pypdfium2
+  - pillow
 
 # Optional. Unset, the module borrows the public client id Microsoft publishes
 # for its Graph command line tools, which works but makes the tenant's sign-in

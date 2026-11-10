@@ -9,10 +9,11 @@ platforms: [windows]
 # m365-graph
 
 To read or summarize a file in OneDrive or SharePoint, call `m365_get` with
-`/me/drive/items/<id>/content`. The result contains `text` for a PDF that has
-a text layer. Do not open the SharePoint link in the browser, and do not call
-`/preview`: the browser viewer does not expose the text layer, and `/preview`
-returns 403.
+`/me/drive/items/<id>/content`. A PDF with a text layer is read locally
+(`text_source` is `text-layer`). A scan, which has none, is sent as page
+images to the internal OCR model (`text_source` is `ocr`). Do not open the
+SharePoint link in the browser, and do not call `/preview`: the browser
+viewer does not expose the text layer, and `/preview` returns 403.
 
 Searches and reads Microsoft 365 through one file:
 `${HERMES_SKILL_DIR}/scripts/microsoft_graph.py`. The user signs in once in a
@@ -22,8 +23,12 @@ browser window; after that every call is silent until the token is revoked.
 already see. There is no service account and no tenant-wide access — if they
 cannot open a site, neither can you.
 
-Runs on the interpreter Hermes already uses; `msal` and `requests` are
-installed there.
+Runs on the interpreter Hermes already uses; `msal`, `requests`,
+`pdfminer.six` and `pypdfium2` are installed there. `pdfminer.six` reads a
+PDF's text layer locally. A scan is rendered with `pypdfium2` and the page
+images go to `M365_OCR_URL` (default `http://ihai.inhat.hu:11434`, model
+`M365_OCR_MODEL`, default `glm-ocr:bf16`). Set `M365_OCR_URL` empty to skip
+that call. The Graph token is not sent with the image.
 
 Shorthand below: `mg` = `%LOCALAPPDATA%\hermes\hermes-agent\venv\Scripts\python.exe ${HERMES_SKILL_DIR}/scripts/microsoft_graph.py`
 
@@ -129,8 +134,8 @@ The file itself, including a PDF, is the same item's `/content` path:
 mg get /me/drive/items/<id>/content
 ```
 
-The answer is JSON with `saved_to` and, when the PDF has a text layer,
-`text`. Summarize `text`. Do not call `/preview` and do not open
+The answer is JSON with `saved_to` and `text`. `text_source` is `text-layer`
+or `ocr`. Summarize `text`. Do not call `/preview` and do not open
 `@microsoft.graph.downloadUrl` or the SharePoint `webUrl` in a browser:
 that session is not signed in, and the plugin would also misread the PDF
 bytes as JSON. `/content` follows the redirect without the Graph token,

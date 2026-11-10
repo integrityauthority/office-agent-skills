@@ -343,46 +343,149 @@ def _token(need_scope=None):
 
 _MAX_FILE_BYTES = 30 * 1024 * 1024
 _TEXT_LIMIT = 60_000
+# The same internal Ollama the asset-declaration comparison uses. A text layer
+# never goes there. Override with M365_OCR_URL= (empty disables) and M365_OCR_MODEL.
+_OCR_URL = "http://ihai.inhat.hu:11434"
+_OCR_MODEL = "glm-ocr:bf16"
+_OCR_MAX_PAGES = 15
+_OCR_DPI = 150
+_OCR_PROMPT = (
+    "Ez egy beszkennelt dokumentumoldal. Írd át BETŰHÍVEN a teljes látható "
+    "szöveget, a nyomtatott szöveget és a kézzel vagy géppel kitöltött "
+    "értékeket egyaránt. A számokat, összegeket és dátumokat pontosan add "
+    "vissza. Ne foglald össze, ne magyarázd, ne hagyj ki semmit — csak a "
+    "szöveget add vissza."
+)
 
 
 def _pdf_text(data, limit=_TEXT_LIMIT):
-    """Best-effort text from a PDF. pypdf when the interpreter has it, otherwise
-    the literal strings of FlateDecode streams. Returns "" when the file is a
-    scan or uses a font the fallback cannot decode."""
+    """Text layer of a PDF, read locally with pdfminer.six.
+
+    Layout parameters match app-atlas ``services/pdf_parse.py``, including text
+    drawn inside a figure. Returns "" when the file is a scan, is unreadable,
+    or pdfminer.six is not installed. This read stays on the machine.
+    """
     import io
-    import zlib
 
     try:
-        from pypdf import PdfReader
-        reader = PdfReader(io.BytesIO(data))
-        parts = [(page.extract_text() or "") for page in reader.pages]
-        text = "\n".join(parts).strip()
-        if text:
-            return text[:limit]
-    except Exception:
-        pass
+        from pdfminer.high_level import extract_pages
+        from pdfminer.layout import LAParams, LTFigure, LTTextContainer
+    except ImportError:
+        return ""
 
-    pieces = []
-    for match in re.finditer(rb"stream\r?\n", data):
-        end = data.find(b"endstream", match.end())
-        if end < 0:
-            continue
-        raw = data[match.end():end].rstrip(b"\r\n")
+    def layout_text(container):
+        parts = []
+        for element in container:
+            if isinstance(element, LTTextContainer):
+                parts.append(element.get_text())
+            elif isinstance(element, LTFigure):
+                parts.append(layout_text(element))
+        return "".join(parts)
+
+    laparams = LAParams(
+        line_margin=0.5,
+        word_margin=0.1,
+        char_margin=2.0,
+        boxes_flow=0.5,
+        all_texts=True,
+    )
+    pages = []
+    try:
+        for page in extract_pages(io.BytesIO(data), laparams=laparams):
+            pages.append(layout_text(page).replace("\r\n", "\n").replace("\r", "\n").strip())
+    except Exception:
+        return ""
+    return "\n\n".join(pages).strip()[:limit]
+
+
+def _ocr_settings():
+    """Where a scan is read. An empty M365_OCR_URL turns OCR off."""
+    if "M365_OCR_URL" in os.environ:
+        url = os.environ.get("M365_OCR_URL", "").strip().rstrip("/")
+    else:
+        url = _OCR_URL
+    model = (os.environ.get("M365_OCR_MODEL") or _OCR_MODEL).strip()
+    return url, model
+
+
+def _pdf_page_pngs(data):
+    """Render the first pages of a PDF to PNG. pypdfium2, not PyMuPDF."""
+    import io
+
+    import pypdfium2 as pdfium
+
+    doc = pdfium.PdfDocument(data)
+    images = []
+    try:
+        total = len(doc)
+        scale = _OCR_DPI / 72
+        for index in range(min(total, _OCR_MAX_PAGES)):
+            page = doc[index]
+            bitmap = page.render(scale=scale)
+            image = bitmap.to_pil()
+            buffer = io.BytesIO()
+            image.save(buffer, format="PNG")
+            images.append(buffer.getvalue())
+            bitmap.close()
+            page.close()
+        return images, total
+    finally:
+        doc.close()
+
+
+def _ocr_pdf(data, limit=_TEXT_LIMIT):
+    """Read a scan by sending page images to the internal OCR model.
+
+    The Graph token is not included. Returns (text, note). A failure leaves
+    the text empty and names the reason; the caller already saved the file.
+    """
+    url, model = _ocr_settings()
+    if not url or not model:
+        return "", "OCR is turned off (M365_OCR_URL is empty). The file is saved locally."
+    try:
+        images, total = _pdf_page_pngs(data)
+    except Exception:
+        return "", "The scan could not be rendered for OCR. The file is saved locally."
+    if not images:
+        return "", "The PDF has no pages to read."
+
+    import base64
+    import requests
+
+    parts = []
+    failed = 0
+    for image in images:
         try:
-            raw = zlib.decompress(raw)
-        except zlib.error:
-            continue
-        for literal in re.finditer(rb"\(((?:\\.|[^\\)])*)\)", raw):
-            chunk = literal.group(1)
-            chunk = re.sub(rb"\\([0-7]{1,3})",
-                           lambda m: bytes([int(m.group(1), 8) & 0xFF]), chunk)
-            chunk = (chunk.replace(rb"\n", b"\n").replace(rb"\r", b"\r")
-                          .replace(rb"\t", b"\t").replace(rb"\(", b"(")
-                          .replace(rb"\)", b")").replace(rb"\\", b"\\"))
-            piece = chunk.decode("utf-8", "replace").strip()
-            if piece and "\ufffd" not in piece:
-                pieces.append(piece)
-    return "\n".join(pieces)[:limit]
+            response = requests.post(
+                f"{url}/api/chat",
+                timeout=180,
+                json={
+                    "model": model,
+                    "messages": [{
+                        "role": "user",
+                        "content": _OCR_PROMPT,
+                        "images": [base64.b64encode(image).decode()],
+                    }],
+                    "stream": False,
+                    "think": False,
+                    "options": {"temperature": 0, "num_ctx": 16384},
+                },
+            )
+            response.raise_for_status()
+            content = ((response.json().get("message") or {}).get("content") or "").strip()
+            if content:
+                parts.append(content)
+        except Exception:
+            failed += 1
+    text = "\n\n".join(parts).strip()[:limit]
+    notes = []
+    if total > len(images):
+        notes.append(f"OCR read the first {len(images)} of {total} pages.")
+    if failed:
+        notes.append(f"{failed} page(s) got no answer from {model}.")
+    if not text:
+        notes.append("The OCR server returned no text. The file is saved locally.")
+    return text, " ".join(notes)
 
 
 def _download_drive_content(path, timeout):
@@ -435,6 +538,12 @@ def _download_drive_content(path, timeout):
         fh.write(data)
 
     text = _pdf_text(data) if ext == ".pdf" else ""
+    source = "text-layer" if text else ""
+    ocr_note = ""
+    if ext == ".pdf" and not text:
+        text, ocr_note = _ocr_pdf(data)
+        if text:
+            source = "ocr"
     result = {
         "saved_to": saved,
         "content_type": content_type or ("application/pdf" if ext else "application/octet-stream"),
@@ -442,13 +551,16 @@ def _download_drive_content(path, timeout):
     }
     if text:
         result["text"] = text
+        result["text_source"] = source
         result["truncated"] = len(text) >= _TEXT_LIMIT
+        if ocr_note:
+            result["note"] = ocr_note
     else:
         result["text"] = ""
-        result["note"] = (
+        result["note"] = ocr_note or (
             "The file is saved. Its text was not extracted here. "
-            "Read saved_to with the pdf skill. Do not open a SharePoint "
-            "or download URL in the browser, and do not call /preview."
+            "Do not open a SharePoint or download URL in the browser, "
+            "and do not call /preview."
         )
     return result
 
