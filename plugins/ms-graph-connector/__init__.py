@@ -47,7 +47,7 @@ GET_SCHEMA = {
     "properties": {
         "path": {
             "type": "string",
-            "description": "Graph path beginning with a slash, for example /me/drive/recent.",
+            "description": "Graph path beginning with a slash. OneDrive root is /me/drive/root/children. A file is /me/drive/items/<id>/content.",
         },
         "params": {
             "type": "object",
@@ -145,7 +145,9 @@ def register(ctx):
     ctx.register_tool(
         "m365_get", "m365", GET_SCHEMA, _get,
         description=(
-            "Fetch a Microsoft Graph resource by path. A PDF is /me/drive/items/<id>/content and returns text. "
+            "List a folder with /me/drive/root/children or /me/drive/items/<id>/children. "
+            "The answer is count, folders and files; report those and do not recount. "
+            "Read a Word, Excel or PDF file with /me/drive/items/<id>/content. "
             "Do not open the file in the browser and do not call /preview. "
             "Read-only: non-GET calls are refused."
         ),
@@ -156,5 +158,5 @@ def register(ctx):
     if skill.exists():
         ctx.register_skill(
             "m365-graph", skill,
-            description="Read OneDrive and SharePoint files, including PDF text, with m365_get /me/drive/items/<id>/content. Do not open the file in the browser.",
+            description="List the signed-in user's OneDrive and open a folder with m365_get /me/drive/root/children. Read a Word, Excel or PDF file with /me/drive/items/<id>/content. Report count, folders and files as returned. Do not open the file in the browser.",
         )
