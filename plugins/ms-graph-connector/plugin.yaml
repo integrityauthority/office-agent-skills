@@ -1,6 +1,6 @@
 manifest_version: 2
 name: ms-graph-connector
-version: 1.2.0
+version: 1.4.0
 description: >-
   Give Hermes read access to your own Microsoft 365: Outlook mail, OneDrive and
   SharePoint documents, Teams chats and your calendar, through the Microsoft
@@ -21,9 +21,11 @@ provides_tools:
 python_dependencies:
   - msal
   - requests
+  - python-docx
+  - openpyxl
+  - pymupdf>=1.26.6,<2
   - pdfminer.six
-  - pypdfium2
-  - pillow
+  - azure-ai-documentintelligence
 
 # Optional. Unset, the module borrows the public client id Microsoft publishes
 # for its Graph command line tools, which works but makes the tenant's sign-in

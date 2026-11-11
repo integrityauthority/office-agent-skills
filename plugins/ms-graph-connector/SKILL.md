@@ -1,6 +1,6 @@
 ---
 name: m365-graph
-description: Search and read the organisation's Microsoft 365 content — Outlook mail, SharePoint and OneDrive documents, Teams chats, the user's calendar — through Microsoft Graph with the signed-in user's own delegated permissions. Use when the user asks to find something that lives in the cloud rather than on this machine ("keresd meg a levelet", "melyik SharePoint dokumentumban van", "mit írtak Teamsen", "mi van a naptáramban"). Do NOT use for a document the user has OPEN in Word/Excel/PowerPoint — that is the office-live skill. Do NOT use for local files.
+description: Search and read the organisation's Microsoft 365 content — Outlook mail, SharePoint and OneDrive documents, Teams chats, the user's calendar — through Microsoft Graph with the signed-in user's own delegated permissions. List the signed-in user's OneDrive with /me/drive/root/children, open a folder from that list, and read a Word, Excel or PDF file with /me/drive/items/<id>/content. Use when the user asks to find something that lives in the cloud rather than on this machine ("keresd meg a levelet", "mi van a OneDrive-omon", "mit ír a dokumentum"). Do NOT use for a document the user has OPEN in Word/Excel/PowerPoint — that is the office-live skill. Do NOT use for local files.
 version: 1.0.0
 author: Integritás Hatóság
 platforms: [windows]
@@ -8,12 +8,27 @@ platforms: [windows]
 
 # m365-graph
 
-To read or summarize a file in OneDrive or SharePoint, call `m365_get` with
-`/me/drive/items/<id>/content`. A PDF with a text layer is read locally
-(`text_source` is `text-layer`). A scan, which has none, is sent as page
-images to the internal OCR model (`text_source` is `ocr`). Do not open the
-SharePoint link in the browser, and do not call `/preview`: the browser
-viewer does not expose the text layer, and `/preview` returns 403.
+To list the signed-in user's OneDrive, call `m365_get` with
+`/me/drive/root/children`. The answer is `count`, `folders` and `files`.
+Report those fields and do not count the items again. Open a folder from
+that list with `/me/drive/items/<id>/children`. A folder addressed by its
+name is `/me/drive/root:/Folder name:/children`.
+
+To read a Word, Excel or PDF file, call `m365_get` with
+`/me/drive/items/<id>/content` and summarize `text`. A `.docx` is read
+locally (`text_source` is `docx`). A `.xlsx` is read locally (`xlsx`): the
+sheet name, then rows. A legacy `.doc` or `.xls` is not extracted; ask for
+the `.docx` or `.xlsx` copy.
+
+A PDF page with a text layer is read locally by PyMuPDF (`text_source`
+contains `text-layer`) and never leaves the machine. A scanned page goes to
+the internal llama-swap OCR model (`local-vlm`). Only if that page is still
+empty does the raw PDF go to Azure Document Intelligence (`azure-di`), and
+only if that call fails does pdfminer read the file locally (`pdfminer`).
+Pages that are still empty are sent as images to Azure OpenAI vision
+(`azure-vision`). Do not open the SharePoint link in the browser, and do
+not call `/preview`: the browser viewer does not expose the text layer, and
+`/preview` returns 403.
 
 Searches and reads Microsoft 365 through one file:
 `${HERMES_SKILL_DIR}/scripts/microsoft_graph.py`. The user signs in once in a
@@ -23,12 +38,17 @@ browser window; after that every call is silent until the token is revoked.
 already see. There is no service account and no tenant-wide access — if they
 cannot open a site, neither can you.
 
-Runs on the interpreter Hermes already uses; `msal`, `requests`,
-`pdfminer.six` and `pypdfium2` are installed there. `pdfminer.six` reads a
-PDF's text layer locally. A scan is rendered with `pypdfium2` and the page
-images go to `M365_OCR_URL` (default `http://ihai.inhat.hu:11434`, model
-`M365_OCR_MODEL`, default `glm-ocr:bf16`). Set `M365_OCR_URL` empty to skip
-that call. The Graph token is not sent with the image.
+Runs on the interpreter Hermes already uses; `msal`, `requests`, `python-docx`,
+`openpyxl`, `pymupdf` (`>=1.26.6,<2`), `pdfminer.six` and
+`azure-ai-documentintelligence` are installed there. python-docx reads a
+`.docx`, openpyxl reads a `.xlsx`. PyMuPDF reads a PDF text layer and any
+table locally, and renders a scanned page. That image goes to `M365_OCR_URL` (default
+`http://ihai.inhat.hu:11500/v1`, model `M365_OCR_MODEL`, default
+`deepseek-ai/DeepSeek-OCR-2`). Set `M365_OCR_URL` empty to skip the internal
+OCR. Azure Document Intelligence runs only when `AZURE_DOC_INTEL_ENDPOINT`
+and `AZURE_DOC_INTEL_KEY` are set and the local page was empty. Azure vision
+uses `AZURE_SWEDEN_API_KEY` and `gpt-5.6-luna-datazone` for pages that are
+still empty. The Graph token is not sent with the file or the image.
 
 Shorthand below: `mg` = `%LOCALAPPDATA%\hermes\hermes-agent\venv\Scripts\python.exe ${HERMES_SKILL_DIR}/scripts/microsoft_graph.py`
 
@@ -106,40 +126,49 @@ came in recently".
 mg calendar list --days 7
 ```
 
-### Files and anything else — the escape hatch
+### OneDrive — list, enter, then read
+
+The signed-in user's own drive, first:
 
 ```
-mg get /me/drive/recent
-mg get /me/joinedTeams
-mg get "/sites/root/drive/root/children" --param '$top=50'
-mg get /me/messages --param '$select=subject,receivedDateTime' --all
+mg get /me/drive/root/children
 ```
 
-Search finds a folder; it does not list what is inside it. After `search`
-returns a `driveItem` id, list that folder with `get`:
+The answer is already counted. Report `count`, then the names in `folders`,
+then the names in `files`. Do not add those lists up again. Enter a folder
+with the `id` from `folders`:
 
 ```
-mg get /me/drive/items/<id-from-search>/children --param '$select=name,size,folder,file,webUrl'
+mg get /me/drive/items/<id>/children
 ```
 
-A folder in the signed-in user's own OneDrive root can also be addressed by
-name: `/me/drive/root:/Accesible:/children`. Do not open the `webUrl` in a
-browser — that is a separate SharePoint sign-in and proves nothing about
-Graph. Never call `get` without a path: Graph answers with its API catalogue,
+`/sites/root/drive/root/children` is the organisation's root site library,
+not this user's OneDrive. Use it only when the user asked for that site.
+Never call `get` without a path: Graph answers with its API catalogue,
 which is not the user's files.
 
-The file itself, including a PDF, is the same item's `/content` path:
+Read a Word, Excel or PDF file with the `id` from `files`:
 
 ```
 mg get /me/drive/items/<id>/content
 ```
 
-The answer is JSON with `saved_to` and `text`. `text_source` is `text-layer`
-or `ocr`. Summarize `text`. Do not call `/preview` and do not open
-`@microsoft.graph.downloadUrl` or the SharePoint `webUrl` in a browser:
-that session is not signed in, and the plugin would also misread the PDF
+The answer is JSON with `saved_to`, `text` and `text_source`. Summarize
+`text`. For a workbook, keep the sheet names. `text_source` is `docx` or
+`xlsx`, or for a PDF the layers joined with `+`: `text-layer`, `local-vlm`,
+`azure-di`, `pdfminer`, `azure-vision`. Do not call `/preview` and do not
+open `@microsoft.graph.downloadUrl` or the SharePoint `webUrl` in a browser:
+that session is not signed in, and the plugin would also misread the file
 bytes as JSON. `/content` follows the redirect without the Graph token,
 which is the only way the bytes come back.
+
+Other reads:
+
+```
+mg get /me/drive/recent
+mg get /me/joinedTeams
+mg get /me/messages --param '$select=subject,receivedDateTime' --all
+```
 
 `get` reaches any Graph GET endpoint. Look the path up in the Microsoft Graph
 documentation when you need something not listed here — the whole read surface

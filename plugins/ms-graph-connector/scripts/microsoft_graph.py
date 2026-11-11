@@ -32,6 +32,8 @@ Design notes for whoever maintains this:
   compact per type down to the fields a human would read, and keep --raw for
   when that is not enough. This is the difference between a search that fits
   in a model's context and one that does not.
+* A drive `/children` listing is compacted the same way: `count`, `folders`
+  and `files`. Word and Excel bytes from `/content` become text here, as PDFs do.
 * The token cache is encrypted with Windows DPAPI, so the file is useless to
   any other account on the machine. It is not a secret store; it is a cache.
 """
@@ -343,28 +345,62 @@ def _token(need_scope=None):
 
 _MAX_FILE_BYTES = 30 * 1024 * 1024
 _TEXT_LIMIT = 60_000
-# The same internal Ollama the asset-declaration comparison uses. A text layer
-# never goes there. Override with M365_OCR_URL= (empty disables) and M365_OCR_MODEL.
-_OCR_URL = "http://ihai.inhat.hu:11434"
-_OCR_MODEL = "glm-ocr:bf16"
+_PAGE_TEXT_MIN = 20
 _OCR_MAX_PAGES = 15
-_OCR_DPI = 150
-_OCR_PROMPT = (
-    "Ez egy beszkennelt dokumentumoldal. Írd át BETŰHÍVEN a teljes látható "
-    "szöveget, a nyomtatott szöveget és a kézzel vagy géppel kitöltött "
-    "értékeket egyaránt. A számokat, összegeket és dátumokat pontosan add "
-    "vissza. Ne foglald össze, ne magyarázd, ne hagyj ki semmit — csak a "
-    "szöveget add vissza."
+# llama-swap on the office machine. A text layer never goes there.
+# M365_OCR_URL= (empty) skips this hop. There is no :11434 fallback.
+_OCR_URL = "http://ihai.inhat.hu:11500/v1"
+_OCR_MODEL = "deepseek-ai/DeepSeek-OCR-2"
+_OCR_DPI = 200
+_OCR_PROMPT = "<|grounding|>Convert the document to markdown."
+_VISION_DPI = 300
+_VISION_URL = "https://sandbox-ai-dev-swedencentral.openai.azure.com/openai/v1"
+_VISION_MODEL = "gpt-5.6-luna-datazone"
+_VISION_PROMPT = (
+    "This is one scanned document page. Transcribe every visible character, "
+    "printed and filled in, including numbers and dates. Do not summarise."
 )
 
 
-def _pdf_text(data, limit=_TEXT_LIMIT):
-    """Text layer of a PDF, read locally with pdfminer.six.
+def _env(name, default=""):
+    return (os.environ.get(name) or default).strip()
 
-    Layout parameters match app-atlas ``services/pdf_parse.py``, including text
-    drawn inside a figure. Returns "" when the file is a scan, is unreadable,
-    or pdfminer.six is not installed. This read stays on the machine.
-    """
+
+def _note_source(sources, name):
+    if name not in sources:
+        sources.append(name)
+
+
+def _usable(text):
+    return len((text or "").strip()) >= _PAGE_TEXT_MIN
+
+
+def _pymupdf_page_text(page):
+    """Text plus any table the page already has. Stays on this machine."""
+    text = (page.get_text("text") or "").strip()
+    tables = []
+    try:
+        found = page.find_tables()
+        for table in getattr(found, "tables", None) or []:
+            rows = []
+            for row in table.extract() or []:
+                rows.append("\t".join((cell or "").strip() for cell in row))
+            block = "\n".join(row for row in rows if row.strip())
+            if block:
+                tables.append(block)
+    except Exception:
+        pass
+    if tables:
+        text = (text + "\n\n" + "\n\n".join(tables)).strip()
+    return text
+
+
+def _page_png(page, dpi):
+    return page.get_pixmap(dpi=dpi).tobytes("png")
+
+
+def _pdfminer_text(data):
+    """Character-level fallback used only after Document Intelligence fails."""
     import io
 
     try:
@@ -395,97 +431,388 @@ def _pdf_text(data, limit=_TEXT_LIMIT):
             pages.append(layout_text(page).replace("\r\n", "\n").replace("\r", "\n").strip())
     except Exception:
         return ""
-    return "\n\n".join(pages).strip()[:limit]
+    return "\n\n".join(pages).strip()
 
 
 def _ocr_settings():
-    """Where a scan is read. An empty M365_OCR_URL turns OCR off."""
     if "M365_OCR_URL" in os.environ:
-        url = os.environ.get("M365_OCR_URL", "").strip().rstrip("/")
+        url = _env("M365_OCR_URL").rstrip("/")
     else:
         url = _OCR_URL
-    model = (os.environ.get("M365_OCR_MODEL") or _OCR_MODEL).strip()
-    return url, model
+    model = _env("M365_OCR_MODEL", _OCR_MODEL)
+    key = _env("M365_OCR_API_KEY", "local")
+    return url, model, key
 
 
-def _pdf_page_pngs(data):
-    """Render the first pages of a PDF to PNG. pypdfium2, not PyMuPDF."""
-    import io
-
-    import pypdfium2 as pdfium
-
-    doc = pdfium.PdfDocument(data)
-    images = []
-    try:
-        total = len(doc)
-        scale = _OCR_DPI / 72
-        for index in range(min(total, _OCR_MAX_PAGES)):
-            page = doc[index]
-            bitmap = page.render(scale=scale)
-            image = bitmap.to_pil()
-            buffer = io.BytesIO()
-            image.save(buffer, format="PNG")
-            images.append(buffer.getvalue())
-            bitmap.close()
-            page.close()
-        return images, total
-    finally:
-        doc.close()
+def _chat_text(payload):
+    choice = ((payload or {}).get("choices") or [{}])[0]
+    content = ((choice.get("message") or {}).get("content")) or ""
+    if isinstance(content, list):
+        content = "".join(
+            (part.get("text") or "") for part in content if isinstance(part, dict)
+        )
+    return str(content).strip()
 
 
-def _ocr_pdf(data, limit=_TEXT_LIMIT):
-    """Read a scan by sending page images to the internal OCR model.
-
-    The Graph token is not included. Returns (text, note). A failure leaves
-    the text empty and names the reason; the caller already saved the file.
-    """
-    url, model = _ocr_settings()
-    if not url or not model:
-        return "", "OCR is turned off (M365_OCR_URL is empty). The file is saved locally."
-    try:
-        images, total = _pdf_page_pngs(data)
-    except Exception:
-        return "", "The scan could not be rendered for OCR. The file is saved locally."
-    if not images:
-        return "", "The PDF has no pages to read."
-
+def _local_vlm_page(png, url, model, key):
     import base64
     import requests
 
-    parts = []
-    failed = 0
-    for image in images:
-        try:
-            response = requests.post(
-                f"{url}/api/chat",
-                timeout=180,
-                json={
-                    "model": model,
-                    "messages": [{
-                        "role": "user",
-                        "content": _OCR_PROMPT,
-                        "images": [base64.b64encode(image).decode()],
-                    }],
-                    "stream": False,
-                    "think": False,
-                    "options": {"temperature": 0, "num_ctx": 16384},
-                },
-            )
-            response.raise_for_status()
-            content = ((response.json().get("message") or {}).get("content") or "").strip()
+    response = requests.post(
+        f"{url}/chat/completions",
+        timeout=180,
+        headers={"Authorization": f"Bearer {key}"},
+        json={
+            "model": model,
+            "temperature": 0,
+            "skip_special_tokens": False,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": _OCR_PROMPT},
+                    {"type": "image_url", "image_url": {
+                        "url": "data:image/png;base64," + base64.b64encode(png).decode(),
+                    }},
+                ],
+            }],
+        },
+    )
+    response.raise_for_status()
+    return _chat_text(response.json())
+
+
+def _azure_di(data):
+    """Raw PDF to prebuilt-layout. Returns (text, status) with status skip|fail|ok."""
+    endpoint = _env("AZURE_DOC_INTEL_ENDPOINT").rstrip("/")
+    key = _env("AZURE_DOC_INTEL_KEY")
+    if not endpoint or not key:
+        return "", "skip"
+    try:
+        from azure.ai.documentintelligence import DocumentIntelligenceClient
+        from azure.ai.documentintelligence.models import AnalyzeDocumentRequest
+        from azure.core.credentials import AzureKeyCredential
+    except ImportError:
+        return "", "fail"
+    try:
+        client = DocumentIntelligenceClient(endpoint, AzureKeyCredential(key))
+        poller = client.begin_analyze_document(
+            "prebuilt-layout",
+            AnalyzeDocumentRequest(bytes_source=data),
+        )
+        result = poller.result()
+    except Exception:
+        return "", "fail"
+    pages = []
+    for page in getattr(result, "pages", None) or []:
+        lines = []
+        for line in getattr(page, "lines", None) or []:
+            content = (getattr(line, "content", None) or "").strip()
             if content:
-                parts.append(content)
-        except Exception:
-            failed += 1
-    text = "\n\n".join(parts).strip()[:limit]
-    notes = []
-    if total > len(images):
-        notes.append(f"OCR read the first {len(images)} of {total} pages.")
-    if failed:
-        notes.append(f"{failed} page(s) got no answer from {model}.")
+                lines.append(content)
+        pages.append("\n".join(lines).strip())
+    text = "\n\n".join(page for page in pages if page).strip()
     if not text:
-        notes.append("The OCR server returned no text. The file is saved locally.")
-    return text, " ".join(notes)
+        text = (getattr(result, "content", None) or "").strip()
+    return text, ("ok" if text else "fail")
+
+
+def _vision_settings():
+    url = _env("M365_VISION_URL", _VISION_URL).rstrip("/")
+    model = _env("M365_VISION_MODEL", _VISION_MODEL)
+    key = _env("AZURE_SWEDEN_API_KEY")
+    return url, model, key
+
+
+def _response_text(payload):
+    chunks = []
+    for item in (payload or {}).get("output") or []:
+        for part in item.get("content") or []:
+            if part.get("type") in ("output_text", "text"):
+                chunks.append(part.get("text") or "")
+    if chunks:
+        return "".join(chunks).strip()
+    return _chat_text(payload)
+
+
+def _azure_vision_page(png, url, model, key):
+    import base64
+    import requests
+
+    response = requests.post(
+        f"{url}/responses",
+        timeout=180,
+        headers={"api-key": key},
+        json={
+            "model": model,
+            "input": [{
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": _VISION_PROMPT},
+                    {"type": "input_image", "image_url":
+                        "data:image/png;base64," + base64.b64encode(png).decode()},
+                ],
+            }],
+        },
+    )
+    response.raise_for_status()
+    return _response_text(response.json())
+
+
+def _place(pages, indexes, text):
+    """Put one recovered block on the first still-empty page."""
+    if not indexes:
+        return
+    pages[indexes[0]] = text
+    for index in indexes[1:]:
+        pages[index] = ""
+
+
+def _read_pdf(data, limit=_TEXT_LIMIT):
+    """Text layer, then local VLM, Azure DI, pdfminer, then Azure vision.
+
+    Returns (text, text_source, note). text_source names every layer that
+    contributed, joined with '+'. A text layer stays on this machine.
+    """
+    notes = []
+    sources = []
+    pages = []
+    doc = None
+    try:
+        import fitz
+        doc = fitz.open(stream=data, filetype="pdf")
+    except Exception as exc:
+        notes.append(f"PyMuPDF could not open the PDF ({type(exc).__name__}).")
+
+    if doc is not None:
+        try:
+            total = len(doc)
+            count = min(total, _OCR_MAX_PAGES)
+            if total > count:
+                notes.append(f"Read the first {count} of {total} pages.")
+            empty = []
+            for index in range(count):
+                body = _pymupdf_page_text(doc[index])
+                if _usable(body):
+                    pages.append(body)
+                    _note_source(sources, "text-layer")
+                else:
+                    pages.append(None)
+                    empty.append(index)
+            url, model, key = _ocr_settings()
+            if empty and url and model:
+                failed = 0
+                for index in empty:
+                    try:
+                        text = _local_vlm_page(_page_png(doc[index], _OCR_DPI), url, model, key)
+                    except Exception:
+                        failed += 1
+                        text = ""
+                    if _usable(text):
+                        pages[index] = text.strip()
+                        _note_source(sources, "local-vlm")
+                if failed:
+                    notes.append(f"{failed} page(s) got no answer from {model}.")
+            elif empty and not url:
+                notes.append("Local OCR is turned off (M365_OCR_URL is empty).")
+        finally:
+            doc.close()
+    else:
+        pages = [None]
+
+    empty = [i for i, text in enumerate(pages) if text is None]
+    if empty:
+        di_text, di_status = _azure_di(data)
+        if di_status == "ok":
+            _place(pages, empty, di_text)
+            _note_source(sources, "azure-di")
+        elif di_status == "fail":
+            notes.append("Azure Document Intelligence did not return text.")
+            miner = _pdfminer_text(data)
+            if miner:
+                _place(pages, empty, miner)
+                _note_source(sources, "pdfminer")
+            else:
+                notes.append("pdfminer.six found no text layer either.")
+        empty = [i for i, text in enumerate(pages) if text is None]
+
+    if empty:
+        url, model, key = _vision_settings()
+        if not key:
+            notes.append("Azure vision is not configured (AZURE_SWEDEN_API_KEY is empty).")
+        else:
+            try:
+                import fitz
+                doc = fitz.open(stream=data, filetype="pdf")
+            except Exception:
+                doc = None
+            if doc is None:
+                notes.append("Azure vision needs a rendered page, and PyMuPDF could not open the PDF.")
+            else:
+                try:
+                    failed = 0
+                    for index in empty:
+                        if index >= len(doc):
+                            continue
+                        try:
+                            text = _azure_vision_page(
+                                _page_png(doc[index], _VISION_DPI), url, model, key)
+                        except Exception:
+                            failed += 1
+                            text = ""
+                        if text.strip():
+                            pages[index] = text.strip()
+                            _note_source(sources, "azure-vision")
+                    if failed:
+                        notes.append(f"{failed} page(s) got no answer from {model}.")
+                finally:
+                    doc.close()
+
+    parts = [text for text in pages if text]
+    text = "\n\n".join(parts).strip()[:limit]
+    if not text and not notes:
+        notes.append("The file is saved locally and no layer returned text.")
+    return text, "+".join(sources), " ".join(n for n in notes if n)
+
+
+def _compact_children(path, payload):
+    """A drive listing down to names the model can repeat without counting."""
+    items = payload.get("value") if isinstance(payload, dict) else None
+    if not isinstance(items, list):
+        return payload
+    if any(not isinstance(item, dict) or "name" not in item for item in items):
+        return payload
+    folders, files = [], []
+    for item in items:
+        row = {"name": item.get("name") or "", "id": item.get("id") or ""}
+        folder = item.get("folder")
+        if isinstance(folder, dict):
+            child = folder.get("childCount")
+            if isinstance(child, int):
+                row["child_count"] = child
+            folders.append({k: v for k, v in row.items() if v != ""})
+        else:
+            size = item.get("size")
+            if isinstance(size, int):
+                row["size"] = size
+            files.append({k: v for k, v in row.items() if v != ""})
+    out = {
+        "path": path,
+        "count": len(folders) + len(files),
+        "folders": folders,
+        "files": files,
+    }
+    if payload.get("@odata.nextLink") or payload.get("truncated_after_pages"):
+        out["truncated"] = True
+        out["note"] = (
+            "Only the first page is here. Open one folder by id, "
+            "or call again with a larger $top."
+        )
+    return out
+
+
+def _present_graph(path, payload):
+    if path.rstrip("/").endswith("/children"):
+        return _compact_children(path, payload)
+    return payload
+
+
+def _office_kind(data, content_type):
+    """pdf, docx, xlsx, ole (legacy .doc/.xls), or empty when unknown."""
+    ct = (content_type or "").split(";")[0].strip().lower()
+    if data.startswith(b"%PDF") or ct == "application/pdf":
+        return "pdf"
+    if "wordprocessingml" in ct:
+        return "docx"
+    if "spreadsheetml" in ct:
+        return "xlsx"
+    if data.startswith(b"PK\x03\x04"):
+        import io
+        import zipfile
+        try:
+            with zipfile.ZipFile(io.BytesIO(data)) as zf:
+                names = zf.namelist()
+        except Exception:
+            return ""
+        if any(name.startswith("word/") for name in names):
+            return "docx"
+        if any(name.startswith("xl/") for name in names):
+            return "xlsx"
+    if data.startswith(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"):
+        return "ole"
+    return ""
+
+
+def _read_docx(data, limit):
+    import io
+    from docx import Document
+
+    doc = Document(io.BytesIO(data))
+    parts = []
+    for paragraph in doc.paragraphs:
+        text = (paragraph.text or "").strip()
+        if text:
+            parts.append(text)
+    for table in doc.tables:
+        for row in table.rows:
+            cells = [(cell.text or "").strip().replace("\n", " ") for cell in row.cells]
+            line = "\t".join(cells).strip()
+            if line:
+                parts.append(line)
+    return "\n".join(parts).strip()[:limit]
+
+
+_XLSX_MAX_SHEETS = 10
+_XLSX_MAX_ROWS = 40
+_XLSX_MAX_COLS = 12
+
+
+def _workbook_text(data, data_only):
+    import io
+    from openpyxl import load_workbook
+
+    wb = load_workbook(io.BytesIO(data), read_only=True, data_only=data_only)
+    try:
+        parts = []
+        clipped = False
+        names = list(wb.sheetnames)
+        if len(names) > _XLSX_MAX_SHEETS:
+            clipped = True
+            names = names[:_XLSX_MAX_SHEETS]
+        for name in names:
+            lines = []
+            for index, row in enumerate(wb[name].iter_rows(values_only=True)):
+                if index >= _XLSX_MAX_ROWS:
+                    clipped = True
+                    break
+                if len(row) > _XLSX_MAX_COLS:
+                    clipped = True
+                cells = [
+                    "" if cell is None else str(cell).replace("\n", " ").strip()
+                    for cell in row[:_XLSX_MAX_COLS]
+                ]
+                if any(cells):
+                    lines.append("\t".join(cells).rstrip())
+            if lines:
+                parts.append("# " + name + "\n" + "\n".join(lines))
+        return "\n\n".join(parts).strip(), clipped, len(wb.sheetnames)
+    finally:
+        wb.close()
+
+
+def _read_xlsx(data, limit):
+    text, clipped, sheet_count = _workbook_text(data, True)
+    notes = []
+    if not text:
+        text, clipped, sheet_count = _workbook_text(data, False)
+        if text:
+            notes.append("Cached cell values were empty, so formulas are shown.")
+    if sheet_count > _XLSX_MAX_SHEETS:
+        notes.append(f"{sheet_count - _XLSX_MAX_SHEETS} further sheet(s) omitted.")
+    if clipped:
+        notes.append(
+            f"Each sheet is clipped to {_XLSX_MAX_ROWS} rows and {_XLSX_MAX_COLS} columns."
+        )
+    return text[:limit], " ".join(notes)
 
 
 def _download_drive_content(path, timeout):
@@ -529,7 +856,8 @@ def _download_drive_content(path, timeout):
     content_type = response.headers.get("Content-Type", "").split(";")[0].strip()
     item = path[:-len("/content")].rstrip("/").rsplit("/", 1)[-1]
     item = re.sub(r"[^A-Za-z0-9._-]", "_", item)[:80] or "file"
-    ext = ".pdf" if data.startswith(b"%PDF") or content_type == "application/pdf" else ""
+    kind = _office_kind(data, content_type)
+    ext = {"pdf": ".pdf", "docx": ".docx", "xlsx": ".xlsx", "ole": ".ole"}.get(kind, "")
     folder = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")),
                           "hermes", "cache", "m365")
     os.makedirs(folder, exist_ok=True)
@@ -537,16 +865,31 @@ def _download_drive_content(path, timeout):
     with open(saved, "wb") as fh:
         fh.write(data)
 
-    text = _pdf_text(data) if ext == ".pdf" else ""
-    source = "text-layer" if text else ""
+    text = ""
+    source = ""
     ocr_note = ""
-    if ext == ".pdf" and not text:
-        text, ocr_note = _ocr_pdf(data)
-        if text:
-            source = "ocr"
+    if kind == "pdf":
+        text, source, ocr_note = _read_pdf(data)
+    elif kind == "docx":
+        try:
+            text = _read_docx(data, _TEXT_LIMIT)
+            source = "docx"
+        except Exception as exc:
+            ocr_note = f"Word text could not be read ({type(exc).__name__})."
+    elif kind == "xlsx":
+        try:
+            text, ocr_note = _read_xlsx(data, _TEXT_LIMIT)
+            source = "xlsx"
+        except Exception as exc:
+            ocr_note = f"Excel text could not be read ({type(exc).__name__})."
+    elif kind == "ole":
+        ocr_note = (
+            "This is a legacy Word or Excel file (.doc or .xls). "
+            "Ask for the .docx or .xlsx copy, then call /content on that item."
+        )
     result = {
         "saved_to": saved,
-        "content_type": content_type or ("application/pdf" if ext else "application/octet-stream"),
+        "content_type": content_type or ("application/pdf" if kind == "pdf" else "application/octet-stream"),
         "size": len(data),
     }
     if text:
@@ -557,8 +900,11 @@ def _download_drive_content(path, timeout):
             result["note"] = ocr_note
     else:
         result["text"] = ""
+        if source:
+            result["text_source"] = source
         result["note"] = ocr_note or (
             "The file is saved. Its text was not extracted here. "
+            "Word, Excel and PDF are the formats read from /content. "
             "Do not open a SharePoint or download URL in the browser, "
             "and do not call /preview."
         )
@@ -588,9 +934,15 @@ def graph(method, path, *, params=None, body=None, allow_write=None,
         raise GraphError(
             "refused: a Graph path is required",
             "An empty path returns the API catalogue, not the user's files. "
-            "To list a folder, take the driveItem id from search and call "
-            "/me/drive/items/<id>/children. A folder in the user's own "
-            "OneDrive root is /me/drive/root:/Folder name:/children.")
+            "The signed-in user's OneDrive root is /me/drive/root/children. "
+            "A folder from that list is /me/drive/items/<id>/children. "
+            "A Word, Excel or PDF file is /me/drive/items/<id>/content.")
+    if method == "GET" and path.rstrip("/").endswith("/children"):
+        params = dict(params or {})
+        if not any(str(key).lower() == "$select" for key in params):
+            params["$select"] = "id,name,size,folder,file"
+        if not any(str(key).lower() == "$top" for key in params):
+            params["$top"] = "50"
     if method == "GET" and path.rstrip("/").endswith("/content"):
         return _download_drive_content(path, timeout)
 
@@ -666,7 +1018,7 @@ def graph(method, path, *, params=None, body=None, allow_write=None,
         params = None                          # nextLink carries its own query
 
         if not all_pages:
-            return payload
+            return _present_graph(path, payload)
         if collected is None:
             collected = payload
         else:
@@ -677,7 +1029,7 @@ def graph(method, path, *, params=None, body=None, allow_write=None,
             if url:
                 collected["truncated_after_pages"] = pages
             collected.pop("@odata.nextLink", None)
-            return collected
+            return _present_graph(path, collected)
 
 
 # ------------------------------------------------------------------ search ---
