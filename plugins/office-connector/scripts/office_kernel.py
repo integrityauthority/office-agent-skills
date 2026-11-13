@@ -90,8 +90,18 @@ def _com_worker():
                 _seed_namespace()
                 reply.put({"ok": True, "result": "namespace reset"})
                 continue
-            reply.put(_run_snippet(code))
+            import office as _office_mod
+            if hasattr(_office_mod, "begin_exec"):
+                _office_mod.begin_exec()
+            result = _run_snippet(code)
+            if hasattr(_office_mod, "finish_exec"):
+                _office_mod.finish_exec(True)
+            reply.put(result)
         except SyntaxError as e:
+            try:
+                _office_mod.finish_exec(False)
+            except Exception:
+                pass
             reply.put({"ok": False, "error": f"SyntaxError: {e}",
                        "hint": "send plain Python; the last expression's "
                                "value is returned automatically"})
@@ -104,6 +114,10 @@ def _com_worker():
             if code_attr == -2147418111:
                 hint = ("Office rejected the call — usually a modal dialog is "
                         "open. Ask the user to dismiss it; do not retry blindly.")
+            try:
+                _office_mod.finish_exec(False)
+            except Exception:
+                pass
             reply.put({"ok": False,
                        "error": f"{type(e).__name__}: {e}",
                        "hint": hint,

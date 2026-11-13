@@ -1,16 +1,18 @@
 ---
 name: office-live
-description: Work live in the user's running Microsoft Office on Windows over COM — read and edit the OPEN Word, Excel or PowerPoint document, and in classic Outlook search mail, read messages, compose new mail, replies and forwards with attachments and formatting, look up contacts and the calendar, and prepare appointments. Use when the user refers to "this document", "the open file", "my selection", "my inbox", "reply to that email", "my calendar", or asks for work in place rather than as a new file. Outlook items are composed and opened for the user to review — this skill never sends or saves mail. Do NOT use for generating a document from scratch (write a .docx/.xlsx/.pptx file instead), and do NOT use on non-Windows machines.
-version: 2.1.0
+description: Work live in the user's running Microsoft Office on Windows over COM — read and edit the OPEN Word, Excel or PowerPoint document, and in classic Outlook search mail, read messages, compose new mail, replies and forwards with attachments and formatting, look up contacts and the calendar, and prepare appointments. Use when the user refers to "this document", "the open file", "my selection", "my inbox", "reply to that email", "my calendar", or asks for work in place rather than as a new file. When the user asks you to open Word or Excel, start that application yourself and create or open the document there. Calling new_doc again while that document is unsaved returns the same window instead of opening another. Outlook items are composed and opened for the user to review — this skill never sends or saves mail. Non-ASCII text, including Hungarian, goes through office_exec only. Do NOT type it with computer-use, and do NOT write a .vbs/.ps1 for cscript or PowerShell — those read UTF-8 as the ANSI code page and corrupt the characters. Do NOT use for generating a document from scratch (write a .docx/.xlsx/.pptx file instead), and do NOT use on non-Windows machines.
+version: 2.4.1
 author: Integritás Hatóság
 platforms: [windows]
 ---
 
 # office-live
 
-Drives Word, Excel and PowerPoint **while the user has them open**, through one
-file: `${HERMES_SKILL_DIR}/scripts/office.py`. Edits appear in their window
-immediately. Word edits land as tracked revisions they can accept or reject.
+Drives Word, Excel and PowerPoint through one file:
+`${HERMES_SKILL_DIR}/scripts/office.py`. Edit the window the user already has
+open. When they ask you to open Word or Excel, start that application yourself.
+Edits appear in their window immediately. Word edits land as tracked revisions
+they can accept or reject.
 
 Everything runs on the interpreter Hermes already uses — pywin32 is installed
 there, so there is nothing to set up.
@@ -19,12 +21,27 @@ there, so there is nothing to set up.
 
 **In Hermes, use the `office_status` and `office_exec` tools — nothing else.**
 They may sit in the tool-search catalogue rather than your visible tool list;
-if so, `tool_describe("office_exec")` once and then call it. Do **not** run
-`office.py` through `terminal`, and do not write your own `win32com` code in
-`execute_code`: both skip the warm connection, the persistent namespace and
-the plugin's guard. (The command line exists for agents without the plugin —
-see the last section — and when it detects Hermes it tells you to come back
-here.)
+if so, call `office_exec` anyway, or `tool_describe("office_exec")` once and
+then call it. Do **not** run `office.py` through `terminal`, and do not write
+your own `win32com` code in `execute_code`: both skip the warm connection, the
+persistent namespace and the plugin's guard. `execute_code` also has no
+`win32com` module, so that import fails. (The command line exists for agents
+without the plugin — see the last section — and when it detects Hermes it
+tells you to come back here.)
+
+## Text encoding
+
+Hungarian and every other non-ASCII character must be an ordinary Python
+string inside `office_exec`. COM receives that string as Unicode, so `á`,
+`ő` and an en dash arrive in Word unchanged.
+
+Do **not** write a `.vbs`, `.js`, `.wsf` or `.ps1` and run it with `cscript`,
+`wscript` or PowerShell, and do **not** type the document body with
+`computer-use`. Windows Script Host reads a UTF-8 file as the system ANSI
+code page (Windows-1250 on a Hungarian PC). The UTF-8 bytes of `á` (`C3 A1`)
+become `Ăˇ`, and an en dash becomes `â€“`. A UTF-8 BOM does not fix this.
+`cscript` only treats a file as Unicode when it is UTF-16 LE with a BOM, and
+that route is still the wrong one: stay on `office_exec`.
 
 `office_exec` runs the snippet against one COM connection kept warm for the
 whole session, and the Python namespace **persists between calls**, so you
@@ -79,6 +96,47 @@ close_doc(wb)
 window or redirecting where their file saves is their call, not yours. Raw
 `doc.Close(...)` and `doc.SaveAs(...)` stay blocked for everything, because a
 regex cannot tell whose document it is; the refusal names the helper to use.
+
+## Starting Word or Excel
+
+When the user asks you to open Word or Excel, or to create or open a document
+in one of them, start the application. Do not ask them to launch it.
+
+```python
+app, doc = new_doc("word", launch=True)
+app, wb = open_doc("excel", r"C:\...\jelentes.xlsx", launch=True)
+```
+
+`launch=True` starts the app only when it is not already running, and shows
+the window. PowerPoint is the same (`"ppt"`) when they ask for it. Do not
+start Outlook this way, and do not launch an app they did not ask for. A
+closed workbook that only needs reading still goes through openpyxl.
+
+One window while the document is unsaved. A call that only runs
+`new_doc("word", launch=True)` has already opened the document. The next
+`office_exec` must call `new_doc` again with the same arguments: it returns
+that same document, whether the previous call succeeded or raised. Do not
+call `Documents.Add`, and do not pass `fresh=True` to continue the same
+report. `fresh=True` is only for when the user explicitly wants an additional
+document. Once the document has been saved or closed, `new_doc` may open
+another. If an earlier attempt left partial text, replace the body before
+writing again (`doc.Content.Delete()` in Word) so the new text is not appended
+beside the old. Do not set a table style by name; `Table Grid` does not exist
+in Hungarian Word. Turn borders on with `table.Borders.Enable = 1`.
+
+Word style names are localized. Hungarian Word has no style named `Title`,
+`Heading 1` or `Table Grid`, and assigning those names raises
+"A megadott nevű elem nem létezik" after the document already exists. Set a
+style by its built-in id: `-63` title, `-75` subtitle, `-2` heading 1,
+`-3` heading 2, `-1` normal. Leave a table on the default style.
+
+```python
+app, doc = new_doc("word", launch=True)
+sel = doc.Content
+sel.Style = -63
+sel.TypeText("Cím\n")
+# on a later retry this same call returns the document above
+```
 
 `visible=False` hides the *document*, never the application — the user's other windows stay put. `save_as` refuses an existing target (Excel would answer with a modal dialog, which over COM is a hang).
 
@@ -234,8 +292,9 @@ and for Word whether tracking is on and how many revisions exist.
 - **"pywin32 is not installed"** → not native Windows Python. The COM route
   does not exist here. Say so and stop.
 - **"not reachable over COM"** → the app is closed, *or* running with no
-  document open (Office only registers itself once a document is loaded). Ask
-  the user to open the file. Never launch Office yourself.
+  document open (Office only registers itself once a document is loaded). If
+  the user asked you to open Word or Excel, call `new_doc` or `open_doc` with
+  `launch=True`. Otherwise ask which file they want.
 
 `status` also reports `com.early_binding`:
 
@@ -506,7 +565,7 @@ connection warm for the whole session, so the attach cost is paid once.
 | Symptom | Cause | What to do |
 | --- | --- | --- |
 | `pywin32 is not installed` | not native Windows Python | Stop; COM is unavailable here. |
-| `not reachable over COM` | app closed, or open with no document | Ask the user to open the file. Never `--launch` on your own. |
+| `not reachable over COM` | app closed, or open with no document | If they asked for Word or Excel, `new_doc` or `open_doc` with `launch=True`. Otherwise ask which file. |
 | `no open document` | app running, nothing loaded | Ask which file to open. |
 | Call returns `True` but nothing changed | dynamic-dispatch misbind | Use `attach()` (early binding). Always read back. |
 | Command hangs | modal dialog open in Office | Ask the user to dismiss it. Do not retry blindly. |

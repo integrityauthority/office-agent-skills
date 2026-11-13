@@ -1,12 +1,34 @@
 ---
 name: m365-graph
-description: Search and read the organisation's Microsoft 365 content — Outlook mail, SharePoint and OneDrive documents, Teams chats, the user's calendar — through Microsoft Graph with the signed-in user's own delegated permissions. Use when the user asks to find something that lives in the cloud rather than on this machine ("keresd meg a levelet", "melyik SharePoint dokumentumban van", "mit írtak Teamsen", "mi van a naptáramban"). Do NOT use for a document the user has OPEN in Word/Excel/PowerPoint — that is the office-live skill. Do NOT use for local files.
+description: Search and read the organisation's Microsoft 365 content — Outlook mail, SharePoint and OneDrive documents, Teams chats, the user's calendar — through Microsoft Graph with the signed-in user's own delegated permissions. List the signed-in user's OneDrive with /me/drive/root/children, open a folder from that list, and read a Word, Excel or PDF file with /me/drive/items/<id>/content. Use when the user asks to find something that lives in the cloud rather than on this machine ("keresd meg a levelet", "mi van a OneDrive-omon", "mit ír a dokumentum"). Do NOT use for a document the user has OPEN in Word/Excel/PowerPoint — that is the office-live skill. Do NOT use for local files.
 version: 1.0.0
 author: Integritás Hatóság
 platforms: [windows]
 ---
 
 # m365-graph
+
+To list the signed-in user's OneDrive, call `m365_get` with
+`/me/drive/root/children`. The answer is `count`, `folders` and `files`.
+Report those fields and do not count the items again. Open a folder from
+that list with `/me/drive/items/<id>/children`. A folder addressed by its
+name is `/me/drive/root:/Folder name:/children`.
+
+To read a Word, Excel or PDF file, call `m365_get` with
+`/me/drive/items/<id>/content` and summarize `text`. A `.docx` is read
+locally (`text_source` is `docx`). A `.xlsx` is read locally (`xlsx`): the
+sheet name, then rows. A legacy `.doc` or `.xls` is not extracted; ask for
+the `.docx` or `.xlsx` copy.
+
+A PDF page with a text layer is read locally by PyMuPDF (`text_source`
+contains `text-layer`) and never leaves the machine. A scanned page goes to
+the internal llama-swap OCR model (`local-vlm`). Only if that page is still
+empty does the raw PDF go to Azure Document Intelligence (`azure-di`), and
+only if that call fails does pdfminer read the file locally (`pdfminer`).
+Pages that are still empty are sent as images to Azure OpenAI vision
+(`azure-vision`). Do not open the SharePoint link in the browser, and do
+not call `/preview`: the browser viewer does not expose the text layer, and
+`/preview` returns 403.
 
 Searches and reads Microsoft 365 through one file:
 `${HERMES_SKILL_DIR}/scripts/microsoft_graph.py`. The user signs in once in a
@@ -16,8 +38,17 @@ browser window; after that every call is silent until the token is revoked.
 already see. There is no service account and no tenant-wide access — if they
 cannot open a site, neither can you.
 
-Runs on the interpreter Hermes already uses; `msal` and `requests` are
-installed there.
+Runs on the interpreter Hermes already uses; `msal`, `requests`, `python-docx`,
+`openpyxl`, `pymupdf` (`>=1.26.6,<2`), `pdfminer.six` and
+`azure-ai-documentintelligence` are installed there. python-docx reads a
+`.docx`, openpyxl reads a `.xlsx`. PyMuPDF reads a PDF text layer and any
+table locally, and renders a scanned page. That image goes to `M365_OCR_URL` (default
+`http://ihai.inhat.hu:11500/v1`, model `M365_OCR_MODEL`, default
+`deepseek-ai/DeepSeek-OCR-2`). Set `M365_OCR_URL` empty to skip the internal
+OCR. Azure Document Intelligence runs only when `AZURE_DOC_INTEL_ENDPOINT`
+and `AZURE_DOC_INTEL_KEY` are set and the local page was empty. Azure vision
+uses `AZURE_SWEDEN_API_KEY` and `gpt-5.6-luna-datazone` for pages that are
+still empty. The Graph token is not sent with the file or the image.
 
 Shorthand below: `mg` = `%LOCALAPPDATA%\hermes\hermes-agent\venv\Scripts\python.exe ${HERMES_SKILL_DIR}/scripts/microsoft_graph.py`
 
@@ -32,7 +63,7 @@ Tells you whether anyone is signed in, as whom, and which scopes were granted.
 - **`signed_in: false`** → run `mg login`. It opens a real browser window;
   **the user has to be at the keyboard.** Say so before you start it, and
   never run it inside a scheduled job.
-- **`msal_installed: false`** → re-run `Setup-Hermes.ps1`, or
+- **`msal_installed: false`** → re-run `Install-Hermes.ps1`, or
   `python.exe -m pip install msal`.
 - **`token_error`** → the cached token died. `mg login` again.
 
@@ -95,12 +126,47 @@ came in recently".
 mg calendar list --days 7
 ```
 
-### Files and anything else — the escape hatch
+### OneDrive — list, enter, then read
+
+The signed-in user's own drive, first:
+
+```
+mg get /me/drive/root/children
+```
+
+The answer is already counted. Report `count`, then the names in `folders`,
+then the names in `files`. Do not add those lists up again. Enter a folder
+with the `id` from `folders`:
+
+```
+mg get /me/drive/items/<id>/children
+```
+
+`/sites/root/drive/root/children` is the organisation's root site library,
+not this user's OneDrive. Use it only when the user asked for that site.
+Never call `get` without a path: Graph answers with its API catalogue,
+which is not the user's files.
+
+Read a Word, Excel or PDF file with the `id` from `files`:
+
+```
+mg get /me/drive/items/<id>/content
+```
+
+The answer is JSON with `saved_to`, `text` and `text_source`. Summarize
+`text`. For a workbook, keep the sheet names. `text_source` is `docx` or
+`xlsx`, or for a PDF the layers joined with `+`: `text-layer`, `local-vlm`,
+`azure-di`, `pdfminer`, `azure-vision`. Do not call `/preview` and do not
+open `@microsoft.graph.downloadUrl` or the SharePoint `webUrl` in a browser:
+that session is not signed in, and the plugin would also misread the file
+bytes as JSON. `/content` follows the redirect without the Graph token,
+which is the only way the bytes come back.
+
+Other reads:
 
 ```
 mg get /me/drive/recent
 mg get /me/joinedTeams
-mg get "/sites/root/drive/root/children" --param '$top=50'
 mg get /me/messages --param '$select=subject,receivedDateTime' --all
 ```
 
