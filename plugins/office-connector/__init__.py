@@ -92,7 +92,11 @@ def register(ctx):
             "refused, the user presses Send. Word edits are tracked "
             "revisions. Helpers are preloaded (find_mail, new_mail, reply, "
             "calendar, open_doc, replace_all, com_date, ...) and the "
-            "namespace persists between calls."
+            "namespace persists between calls. Another new_doc while the "
+            "document is unsaved returns the same window, including after a "
+            "successful open. Pass fresh=True only for an additional document. "
+            "Set Word styles by id (-63 title, -2 heading 1). Do not set "
+            "table.Style to an English name."
         ),
         emoji="\N{PENCIL}",
     )
@@ -115,5 +119,5 @@ def register(ctx):
     if skill.exists():
         ctx.register_skill(
             "office-live", skill,
-            description="Recipes and pitfalls for driving the open Office document over COM.",
+            description="Edit the OPEN Word, Excel or PowerPoint document with office_exec. If the user asks, start Word or Excel with new_doc or open_doc and launch=True. Another new_doc while that document is unsaved returns the same window, even when the previous call succeeded. Do not open a second one. Set Word styles by id (-63 title, -2 heading). Do not set a table style by its English name. Hungarian text must be a Python string there. Never use computer-use, cscript, or a .vbs/.ps1 file: Windows Script Host reads UTF-8 as the ANSI code page and corrupts the characters.",
         )
