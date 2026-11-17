@@ -14,6 +14,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          # The whole history, so a pull request's own commits can be checked.
+          fetch-depth: 0
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
@@ -22,3 +25,15 @@ jobs:
       # install` takes one directory and nothing outside it. The copy is a
       # derived artefact; this fails the build if it stops matching.
       - run: python tools/sync_plugins.py --check
+      # This repository is public. Internal hostnames, model deployments, keys
+      # and work e-mail addresses must not reach it, in files or in commit
+      # metadata; once fetched they cannot be taken back.
+      - name: public-safety check
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [ -n "$BASE_REF" ]; then
+            python tools/check_public.py --commits "origin/$BASE_REF..HEAD"
+          else
+            python tools/check_public.py
+          fi
