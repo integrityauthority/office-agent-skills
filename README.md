@@ -194,6 +194,34 @@ fresh `apb pull` takes the new version.
 Keep a playbook private while a skill is still being shaped: a private playbook
 is reachable with `apb pull` and a key, and serves nothing publicly.
 
+## Configuration
+
+Everything is optional and read from environment variables; Hermes reads them
+from its `.env`. Nothing in this repository names a server or a deployment,
+so a skill with no configuration still works and simply leaves scanned pages
+empty.
+
+| Variable | Used by | Meaning |
+|---|---|---|
+| `OCR_URL` | file-reader, m365-graph | Your own OpenAI-compatible server (`/chat/completions` with an image). Scanned PDF pages always go here first. |
+| `OCR_MODEL` | file-reader, m365-graph | Model on that server. Default `deepseek-ai/DeepSeek-OCR-2`; any other vision model gets a plain transcription prompt. |
+| `OCR_API_KEY` | file-reader, m365-graph | Bearer token for that server, if it wants one. |
+| `OCR_CLOUD_URL` | file-reader, m365-graph | A cloud vision model behind the OpenAI Responses API (`/responses`), Azure OpenAI included. |
+| `OCR_CLOUD_MODEL` | file-reader, m365-graph | Model or deployment name there. |
+| `OCR_CLOUD_API_KEY` | file-reader, m365-graph | Its key. Sent as `api-key` to `*.azure.com`, as a bearer token elsewhere. |
+| `OCR_CLOUD_API_KEY_ENV` | file-reader, m365-graph | Instead of the key: the name of the variable that already holds it, so a secret your agent has anyway is not copied. |
+| `AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT`, `AZURE_DOCUMENT_INTELLIGENCE_KEY` | m365-graph | Optional Azure layout model, tried before the cloud vision model. |
+| `MSGRAPH_CLIENT_ID`, `MSGRAPH_TENANT_ID` | m365-graph | Your own Entra ID application and tenant; see below. |
+
+The OCR order is the same in both skills:
+
+1. the text layer, on this machine;
+2. `OCR_URL`, for pages without one;
+3. nothing more on its own. If pages are still empty and a cloud model is
+   configured, the answer carries `cloud_ocr_needs_approval` with the page
+   numbers. The agent asks the user, and only on a yes calls again with
+   `ocr="cloud"`; the OCR server is tried first even then.
+
 ## What they do and do not do
 
 Both skills act as the signed-in user and gain no access that user did not
@@ -209,10 +237,10 @@ neither skill reports telemetry anywhere, and no credential is stored by them
 (`m365-graph` uses MSAL's own token cache and never sees a password). Nothing
 is sent to a model by the skills themselves — whatever the agent reads enters
 its context, and where that goes is decided by the model you configured. The
-one exception is OCR: a scanned PDF page with no text layer is sent as an
-image to the OCR endpoint named in `M365_OCR_URL`, if one is set, and to the
-vision deployment in `M365_VISION_URL` only when `file-reader` is called with
-`ocr="cloud"`. A page with a text layer is always read locally.
+one exception is OCR, described under [Configuration](#configuration): a
+scanned page goes to your own OCR server if you set one, and to a cloud model
+only on a second, explicit call the user has agreed to. A page with a text
+layer is always read locally.
 
 `office.py --warm` keeps a background process holding the COM objects between
 calls, because cold-starting COM costs a third of a second each time. It binds
@@ -272,11 +300,25 @@ area explicitly.
 ### Third-party software
 
 Nothing third-party is bundled here. At runtime the skills import
-[pywin32](https://github.com/mhammond/pywin32), and
+[pywin32](https://github.com/mhammond/pywin32) (PSF),
 [msal](https://github.com/AzureAD/microsoft-authentication-library-for-python)
-(MIT), [requests](https://github.com/psf/requests) (Apache-2.0) and the
-[MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk) (MIT),
-each installed and licensed on its own terms. No code from any other project
+(MIT), [requests](https://github.com/psf/requests) (Apache-2.0),
+[pypdfium2](https://github.com/pypdfium2-team/pypdfium2) (Apache-2.0 / BSD-3),
+[pdfplumber](https://github.com/jsvine/pdfplumber) and
+[pdfminer.six](https://github.com/pdfminer/pdfminer.six) (MIT),
+[olefile](https://github.com/decalage2/olefile) (BSD-2),
+[openpyxl](https://foss.heptapod.net/openpyxl/openpyxl) (MIT),
+[python-docx](https://github.com/python-openxml/python-docx) (MIT) and
+[Pillow](https://github.com/python-pillow/Pillow) (MIT-CMU), and optionally
+the [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk) (MIT),
+each installed and licensed on its own terms.
+
+Only permissively licensed dependencies are used, on purpose. PyMuPDF
+(AGPL-3.0) and extract-msg (GPL-3.0) would each do part of the job, and are
+not used: the `.msg` reader here is written against Microsoft's published
+[MS-OXMSG] format instead.
+
+[MS-OXMSG]: https://learn.microsoft.com/openspecs/exchange_server_protocols/ms-oxmsg/ No code from any other project
 has been copied into this repository.
 
 ### Trademarks

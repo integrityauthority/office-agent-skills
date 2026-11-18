@@ -27,8 +27,8 @@ follow the hint instead of retrying the same call.
 
 - **PDF**: `page_count`, `pages_read`, `page_sources` and `text` with a
   `--- page N ---` line before each page. Quote page numbers from those lines.
-  `page_sources` says how each page was read: `text-layer`, `local-ocr`,
-  `azure-vision` or `no-text`.
+  `page_sources` says how each page was read: `text-layer`, `ocr-server`,
+  `cloud-vision` or `no-text`.
 - **E-mail**: `subject`, `from`, `to`, `cc`, `date`, `text` (the body) and
   `attachments`, each with `index`, `name`, `mime`, `size`, `inline`.
   `inline` items are pictures in the body, usually signature logos; leave them
@@ -43,13 +43,13 @@ follow the hint instead of retrying the same call.
 The same order as m365-graph:
 
 1. A page with a text layer is read on this machine. It never leaves it.
-2. A page without one always goes to the organisation's internal OCR server
-   (`M365_OCR_URL`) first. Ten pages per call; `notes` names the rest.
+2. A page without one always goes to the organisation's own OCR server
+   (`OCR_URL`) first. Ten pages per call; `notes` names the rest.
 3. Nothing goes to a cloud model on its own. When pages stay empty and a
    cloud model is configured, the answer has `cloud_ocr_needs_approval` with
    the page numbers. Ask the user. Only if they agree, call again with
-   `ocr="cloud"`: the internal server is still tried first, and the pages it
-   leaves empty go as images to the Azure vision deployment.
+   `ocr="cloud"`: the OCR server is still tried first, and the pages it
+   leaves empty go as images to the cloud vision model (`OCR_CLOUD_URL`).
 
 `ocr="never"` reads only the text layer. `ocr="force"` OCRs every requested
 page, for a PDF whose text layer is garbage.

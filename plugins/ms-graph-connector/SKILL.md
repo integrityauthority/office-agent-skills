@@ -22,13 +22,14 @@ the `.docx` or `.xlsx` copy.
 
 A PDF is read in the same order as file-reader does it. A page with a text
 layer is read locally by pypdfium2 (`text_source` contains `text-layer`) and
-never leaves the machine. A scanned page always goes to the internal OCR
-server first (`local-vlm`). Nothing goes to Azure on its own: if pages are
-still empty, the answer has `cloud_ocr_needs_approval`. Ask the user; only if
-they agree, call `m365_get` again with the same path and `ocr="cloud"`. Then
-Azure Document Intelligence (`azure-di`, when configured) and Azure OpenAI
-vision (`azure-vision`) read the pages still empty. Do not open the SharePoint link in the browser, and do
-not call `/preview`: the browser viewer does not expose the text layer, and
+never leaves the machine. A scanned page always goes to the organisation's
+own OCR server first (`ocr-server`). Nothing goes to a cloud model on its
+own: if pages are still empty, the answer has `cloud_ocr_needs_approval`. Ask
+the user; only if they agree, call `m365_get` again with the same path and
+`ocr="cloud"`. Then Azure Document Intelligence
+(`azure-document-intelligence`, when configured) and the cloud vision model
+(`cloud-vision`) read the pages still empty. Do not open the SharePoint link
+in the browser, and do not call `/preview`: the browser viewer does not expose the text layer, and
 `/preview` returns 403.
 
 Searches and reads Microsoft 365 through one file:
@@ -44,12 +45,13 @@ Runs on the interpreter Hermes already uses; `msal`, `requests`, `python-docx`,
 `azure-ai-documentintelligence` are installed there. python-docx reads a
 `.docx`, openpyxl reads a `.xlsx`. pypdfium2 reads a PDF text layer and
 renders a scanned page, pdfplumber adds any table, both locally. (PyMuPDF
-is not used: it is AGPL-3.0.) That image goes to `M365_OCR_URL` (no default, set by the installer; model `M365_OCR_MODEL`, default
-`deepseek-ai/DeepSeek-OCR-2`). Set `M365_OCR_URL` empty to skip the internal
-OCR. Azure Document Intelligence runs only when `AZURE_DOC_INTEL_ENDPOINT`
-and `AZURE_DOC_INTEL_KEY` are set and the local page was empty. Azure vision
-uses `M365_VISION_URL`, `M365_VISION_MODEL` and `AZURE_SWEDEN_API_KEY`. Both
-Azure steps run only with `ocr="cloud"`. The Graph token is not sent with the file or the image.
+is not used: it is AGPL-3.0.) The OCR settings are the same environment
+variables file-reader uses: `OCR_URL` and `OCR_MODEL` (default
+`deepseek-ai/DeepSeek-OCR-2`) for your own server; `OCR_CLOUD_URL`,
+`OCR_CLOUD_MODEL` and `OCR_CLOUD_API_KEY` (or `OCR_CLOUD_API_KEY_ENV`) for
+the cloud model; `AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT` and `_KEY` for the
+optional layout model. Both cloud steps run only with `ocr="cloud"`. The
+Graph token is not sent with the file or the image.
 
 Shorthand below: `mg` = `%LOCALAPPDATA%\hermes\hermes-agent\venv\Scripts\python.exe ${HERMES_SKILL_DIR}/scripts/microsoft_graph.py`
 
@@ -156,8 +158,8 @@ mg get /me/drive/items/<id>/content
 
 The answer is JSON with `saved_to`, `text` and `text_source`. Summarize
 `text`. For a workbook, keep the sheet names. `text_source` is `docx` or
-`xlsx`, or for a PDF the layers joined with `+`: `text-layer`, `local-vlm`,
-`azure-di`, `pdfminer`, `azure-vision`. Do not call `/preview` and do not
+`xlsx`, or for a PDF the layers joined with `+`: `text-layer`, `ocr-server`,
+`pdfminer`, `azure-document-intelligence`, `cloud-vision`. Do not call `/preview` and do not
 open `@microsoft.graph.downloadUrl` or the SharePoint `webUrl` in a browser:
 that session is not signed in, and the plugin would also misread the file
 bytes as JSON. `/content` follows the redirect without the Graph token,

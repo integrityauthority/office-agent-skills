@@ -18,8 +18,8 @@ READ_SCHEMA = {
         "pages": {"type": "string",
                   "description": "PDF pages, 1-based, e.g. '1-3,7'. Default: all."},
         "ocr": {"type": "string", "enum": ["auto", "never", "force", "cloud"],
-                "description": "auto: internal OCR for pages without text. cloud sends page "
-                               "images to Azure; ask the user first."},
+                "description": "auto: your OCR server (OCR_URL) for pages without text. cloud also "
+                               "sends pages still empty to the cloud model; only after the user agreed."},
         "attachment": {"type": "string",
                        "description": "For an .msg/.eml: read this attachment instead, by index "
                                       "('2'), nested index ('2/1') or file name."},
@@ -81,7 +81,7 @@ def register(ctx):
         description=(
             # The tool-search catalogue shows the first sentence, cut at 60 characters.
             "Read a PDF, e-mail (.msg/.eml) or Office file as text. "
-            "Scanned PDF pages go through the internal OCR; an e-mail comes back as "
+            "Scanned PDF pages go to your own OCR server; an e-mail comes back as "
             "headers, body and an attachment list, and attachment='2' reads one "
             "attachment in place. Also .docx, .xlsx, .pptx, HTML and text. Read-only."
         ),

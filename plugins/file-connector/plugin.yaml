@@ -25,3 +25,14 @@ python_dependencies:
   - olefile
   - openpyxl
   - pillow
+
+# OCR, shared with the other plugins in this repository (see the README,
+# "Configuration"). All optional: without them scanned PDF pages stay empty.
+optional_env:
+  - OCR_URL
+  - OCR_MODEL
+  - OCR_API_KEY
+  - OCR_CLOUD_URL
+  - OCR_CLOUD_MODEL
+  - OCR_CLOUD_API_KEY
+  - OCR_CLOUD_API_KEY_ENV

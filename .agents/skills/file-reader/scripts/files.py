@@ -12,9 +12,10 @@ plain text. One call per file instead of a script per file.
     render_pages(r"C:\\path\\scan.pdf", pages="1")     # PNG to look at
 
 Everything here reads; nothing changes the source file. A PDF page that has a
-text layer never leaves this machine. A scanned page goes to the internal OCR
-model when `M365_OCR_URL` is set; to the Azure vision deployment only when the
-caller passes ``ocr="cloud"``.
+text layer never leaves this machine. A scanned page goes to your own OCR
+server when ``OCR_URL`` is set, and to a cloud vision model (``OCR_CLOUD_*``)
+only when the caller passes ``ocr="cloud"``, after the user agreed. The
+variables are listed in the repository README under "Configuration".
 
 Libraries, all permissive: pypdfium2 (Apache/BSD) for PDF text and
 rendering, pdfminer.six (MIT) as a text fallback, olefile (BSD) for .msg,
@@ -33,6 +34,7 @@ import os
 import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 from email import policy
@@ -51,7 +53,9 @@ OCR_PAGES_PER_CALL = 10
 OCR_DPI = 200
 VISION_DPI = 250
 OCR_MODEL_DEFAULT = "deepseek-ai/DeepSeek-OCR-2"
-OCR_PROMPT = "<|grounding|>Convert the document to markdown."
+# DeepSeek-OCR is steered by its own control prompt; any other vision model
+# gets the plain transcription instruction.
+DEEPSEEK_OCR_PROMPT = "<|grounding|>Convert the document to markdown."
 VISION_PROMPT = (
     "This is one scanned document page. Transcribe every visible character, "
     "printed and filled in, including numbers and dates. Do not summarise."
@@ -314,30 +318,52 @@ def _clean_ocr(text):
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
+def _env(name, default=""):
+    return (os.environ.get(name) or default).strip()
+
+
 def ocr_settings():
-    local_url = (os.environ.get("M365_OCR_URL") or "").strip().rstrip("/")
-    local_model = (os.environ.get("M365_OCR_MODEL") or OCR_MODEL_DEFAULT).strip()
-    local_key = (os.environ.get("M365_OCR_API_KEY") or "local").strip()
-    cloud_url = (os.environ.get("M365_VISION_URL") or "").strip().rstrip("/")
-    cloud_model = (os.environ.get("M365_VISION_MODEL") or "").strip()
-    cloud_key = (os.environ.get("AZURE_SWEDEN_API_KEY") or "").strip()
-    return {
-        "local": (local_url, local_model, local_key) if local_url else None,
-        "cloud": (cloud_url, cloud_model, cloud_key) if cloud_url and cloud_model and cloud_key else None,
-    }
+    """The two OCR tiers, from the environment. Identical in m365-graph.
+
+    OCR_URL, OCR_MODEL, OCR_API_KEY
+        Your own OpenAI-compatible server (chat completions with an image).
+        Always tried first.
+    OCR_CLOUD_URL, OCR_CLOUD_MODEL, and OCR_CLOUD_API_KEY or
+    OCR_CLOUD_API_KEY_ENV (the name of the variable that holds the key)
+        A cloud vision model behind the OpenAI Responses API, Azure OpenAI
+        included. Used only with ocr="cloud".
+    """
+    local_url = _env("OCR_URL").rstrip("/")
+    local = (local_url, _env("OCR_MODEL", OCR_MODEL_DEFAULT), _env("OCR_API_KEY")) if local_url else None
+    cloud_url = _env("OCR_CLOUD_URL").rstrip("/")
+    cloud_model = _env("OCR_CLOUD_MODEL")
+    cloud_key = _env("OCR_CLOUD_API_KEY") or (_env(_env("OCR_CLOUD_API_KEY_ENV")) if _env("OCR_CLOUD_API_KEY_ENV") else "")
+    cloud = (cloud_url, cloud_model, cloud_key) if cloud_url and cloud_model and cloud_key else None
+    return {"local": local, "cloud": cloud}
+
+
+def _auth_headers(url, key):
+    """Azure OpenAI takes the key in `api-key`; everyone else as a bearer token."""
+    if not key:
+        return {}
+    host = urllib.parse.urlsplit(url).hostname or ""
+    if host.endswith(".azure.com"):
+        return {"api-key": key}
+    return {"Authorization": f"Bearer {key}"}
 
 
 def _ocr_local(png, url, model, key):
+    deepseek = "deepseek-ocr" in model.lower()
     payload = _post_json(f"{url}/chat/completions", {
         "model": model,
         "temperature": 0,
-        "skip_special_tokens": False,
+        **({"skip_special_tokens": False} if deepseek else {}),
         "messages": [{"role": "user", "content": [
-            {"type": "text", "text": OCR_PROMPT},
+            {"type": "text", "text": DEEPSEEK_OCR_PROMPT if deepseek else VISION_PROMPT},
             {"type": "image_url", "image_url": {
                 "url": "data:image/png;base64," + base64.b64encode(png).decode()}},
         ]}],
-    }, {"Authorization": f"Bearer {key}"})
+    }, _auth_headers(url, key))
     return _clean_ocr(_chat_text(payload))
 
 
@@ -349,7 +375,7 @@ def _ocr_cloud(png, url, model, key):
             {"type": "input_image",
              "image_url": "data:image/png;base64," + base64.b64encode(png).decode()},
         ]}],
-    }, {"api-key": key})
+    }, _auth_headers(url, key))
     chunks = [part.get("text") or ""
               for item in payload.get("output") or []
               for part in item.get("content") or []
@@ -438,7 +464,7 @@ def read_pdf(data, pages=None, ocr="auto", max_chars=TEXT_LIMIT):
     else:
         need = [i for i in selected if not source[i]]
 
-    # The order is the same as in m365-graph: the internal OCR server first,
+    # The order is the same as in m365-graph: your own OCR server first,
     # always; the cloud model only for pages still empty, and only when the
     # caller passes ocr="cloud" after the user agreed.
     settings = ocr_settings()
@@ -449,15 +475,15 @@ def read_pdf(data, pages=None, ocr="auto", max_chars=TEXT_LIMIT):
     elif need:
         engines = []
         if settings["local"]:
-            engines.append(("local-ocr", settings["local"], _ocr_local, OCR_DPI))
+            engines.append(("ocr-server", settings["local"], _ocr_local, OCR_DPI))
         else:
-            notes.append("Internal OCR is not configured (M365_OCR_URL is empty).")
+            notes.append("No OCR server is configured (OCR_URL is empty).")
         if ocr == "cloud":
             if settings["cloud"]:
-                engines.append(("azure-vision", settings["cloud"], _ocr_cloud, VISION_DPI))
+                engines.append(("cloud-vision", settings["cloud"], _ocr_cloud, VISION_DPI))
             else:
-                notes.append("ocr='cloud' was asked for but M365_VISION_URL, M365_VISION_MODEL "
-                             "or AZURE_SWEDEN_API_KEY is not set.")
+                notes.append("ocr='cloud' was asked for but OCR_CLOUD_URL, OCR_CLOUD_MODEL "
+                             "or the cloud key (OCR_CLOUD_API_KEY / OCR_CLOUD_API_KEY_ENV) is not set.")
         if engines:
             todo, ocr_skipped = need[:OCR_PAGES_PER_CALL], need[OCR_PAGES_PER_CALL:]
             done = set()
@@ -492,7 +518,7 @@ def read_pdf(data, pages=None, ocr="auto", max_chars=TEXT_LIMIT):
         cloud_offer = {
             "pages": _ranges(empty),
             "how": "Ask the user. Only if they agree, call again with ocr='cloud': these pages "
-                   "then go as images to the Azure vision deployment, outside this machine.",
+                   "then go as images to the cloud vision model, outside the organisation.",
         }
 
     parts = []
@@ -956,7 +982,7 @@ def status():
             "xlsx": "openpyxl" if has("openpyxl") else None,
             "docx_pptx_eml_html_text": "standard library",
         },
-        "ocr_local": {"configured": bool(settings["local"]),
+        "ocr_server": {"configured": bool(settings["local"]),
                       "model": settings["local"][1] if settings["local"] else None},
         "ocr_cloud": {"configured": bool(settings["cloud"]),
                       "model": settings["cloud"][1] if settings["cloud"] else None,

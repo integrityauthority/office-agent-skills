@@ -56,8 +56,8 @@ GET_SCHEMA = {
         "ocr": {
             "type": "string",
             "enum": ["auto", "never", "cloud"],
-            "description": "For a PDF /content. auto: text layer, then the internal OCR server. "
-                           "cloud: also Azure for pages still empty; only after the user agreed.",
+            "description": "For a PDF /content. auto: text layer, then your OCR server (OCR_URL). "
+                           "cloud: also the cloud model for pages still empty; only after the user agreed.",
         },
     },
     "required": ["path"],

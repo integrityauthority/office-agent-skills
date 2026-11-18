@@ -36,3 +36,12 @@ python_dependencies:
 # application and set this for anything beyond trying the plugin out.
 optional_env:
   - MSGRAPH_CLIENT_ID
+  - OCR_URL
+  - OCR_MODEL
+  - OCR_API_KEY
+  - OCR_CLOUD_URL
+  - OCR_CLOUD_MODEL
+  - OCR_CLOUD_API_KEY
+  - OCR_CLOUD_API_KEY_ENV
+  - AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT
+  - AZURE_DOCUMENT_INTELLIGENCE_KEY

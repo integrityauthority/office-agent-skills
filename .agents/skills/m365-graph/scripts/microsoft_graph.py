@@ -347,15 +347,13 @@ _MAX_FILE_BYTES = 30 * 1024 * 1024
 _TEXT_LIMIT = 60_000
 _PAGE_TEXT_MIN = 20
 _OCR_MAX_PAGES = 15
-# llama-swap on the office machine. A text layer never goes there.
-# M365_OCR_URL= (empty) skips this hop. There is no :11434 fallback.
-_OCR_URL = ""
+# OCR configuration is read from the environment, with the same names and the
+# same order as file-reader: OCR_URL / OCR_MODEL / OCR_API_KEY for your own
+# server, OCR_CLOUD_* only with ocr="cloud". See _ocr_settings below.
 _OCR_MODEL = "deepseek-ai/DeepSeek-OCR-2"
 _OCR_DPI = 200
-_OCR_PROMPT = "<|grounding|>Convert the document to markdown."
+_DEEPSEEK_OCR_PROMPT = "<|grounding|>Convert the document to markdown."
 _VISION_DPI = 300
-_VISION_URL = ""
-_VISION_MODEL = ""
 _VISION_PROMPT = (
     "This is one scanned document page. Transcribe every visible character, "
     "printed and filled in, including numbers and dates. Do not summarise."
@@ -469,13 +467,19 @@ def _pdfminer_text(data):
 
 
 def _ocr_settings():
-    if "M365_OCR_URL" in os.environ:
-        url = _env("M365_OCR_URL").rstrip("/")
-    else:
-        url = _OCR_URL
-    model = _env("M365_OCR_MODEL", _OCR_MODEL)
-    key = _env("M365_OCR_API_KEY", "local")
-    return url, model, key
+    """Your own OpenAI-compatible OCR server; always tried first.
+    OCR_URL empty (the default) skips it."""
+    return _env("OCR_URL").rstrip("/"), _env("OCR_MODEL", _OCR_MODEL), _env("OCR_API_KEY")
+
+
+def _auth_headers(url, key):
+    """Azure OpenAI takes the key in `api-key`; everyone else as a bearer token."""
+    from urllib.parse import urlsplit
+    if not key:
+        return {}
+    if (urlsplit(url).hostname or "").endswith(".azure.com"):
+        return {"api-key": key}
+    return {"Authorization": f"Bearer {key}"}
 
 
 def _chat_text(payload):
@@ -488,22 +492,24 @@ def _chat_text(payload):
     return str(content).strip()
 
 
-def _local_vlm_page(png, url, model, key):
+def _ocr_server_page(png, url, model, key):
     import base64
     import requests
+
+    deepseek = "deepseek-ocr" in model.lower()
 
     response = requests.post(
         f"{url}/chat/completions",
         timeout=180,
-        headers={"Authorization": f"Bearer {key}"},
+        headers=_auth_headers(url, key),
         json={
             "model": model,
             "temperature": 0,
-            "skip_special_tokens": False,
+            **({"skip_special_tokens": False} if deepseek else {}),
             "messages": [{
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": _OCR_PROMPT},
+                    {"type": "text", "text": _DEEPSEEK_OCR_PROMPT if deepseek else _VISION_PROMPT},
                     {"type": "image_url", "image_url": {
                         "url": "data:image/png;base64," + base64.b64encode(png).decode(),
                     }},
@@ -536,8 +542,8 @@ def _clean_ocr(text):
 
 def _azure_di(data):
     """Raw PDF to prebuilt-layout. Returns (text, status) with status skip|fail|ok."""
-    endpoint = _env("AZURE_DOC_INTEL_ENDPOINT").rstrip("/")
-    key = _env("AZURE_DOC_INTEL_KEY")
+    endpoint = _env("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT").rstrip("/")
+    key = _env("AZURE_DOCUMENT_INTELLIGENCE_KEY")
     if not endpoint or not key:
         return "", "skip"
     try:
@@ -570,10 +576,13 @@ def _azure_di(data):
 
 
 def _vision_settings():
-    url = _env("M365_VISION_URL", _VISION_URL).rstrip("/")
-    model = _env("M365_VISION_MODEL", _VISION_MODEL)
-    key = _env("AZURE_SWEDEN_API_KEY")
-    return url, model, key
+    """A cloud vision model behind the OpenAI Responses API (Azure OpenAI
+    included); only with ocr="cloud". The key is OCR_CLOUD_API_KEY, or the
+    variable that OCR_CLOUD_API_KEY_ENV names."""
+    key = _env("OCR_CLOUD_API_KEY")
+    if not key and _env("OCR_CLOUD_API_KEY_ENV"):
+        key = _env(_env("OCR_CLOUD_API_KEY_ENV"))
+    return _env("OCR_CLOUD_URL").rstrip("/"), _env("OCR_CLOUD_MODEL"), key
 
 
 def _response_text(payload):
@@ -587,14 +596,14 @@ def _response_text(payload):
     return _chat_text(payload)
 
 
-def _azure_vision_page(png, url, model, key):
+def _cloud_vision_page(png, url, model, key):
     import base64
     import requests
 
     response = requests.post(
         f"{url}/responses",
         timeout=180,
-        headers={"api-key": key},
+        headers=_auth_headers(url, key),
         json={
             "model": model,
             "input": [{
@@ -635,10 +644,11 @@ def _read_pdf(data, limit=_TEXT_LIMIT, ocr="auto"):
     """Read a PDF the same way file-reader does.
 
     1. the text layer, locally;
-    2. the internal OCR server (M365_OCR_URL) for pages without one, always;
+    2. your own OCR server (OCR_URL) for pages without one, always;
     3. pdfminer.six, locally, when pypdfium2 could not open the file;
     4. only with ocr="cloud", which the agent passes after the user agreed:
-       Azure Document Intelligence, then Azure vision, for pages still empty.
+       Azure Document Intelligence (if configured), then the cloud vision
+       model (OCR_CLOUD_*), for pages still empty.
 
     Returns (text, text_source, note, cloud_offer). text_source names every
     layer that contributed, joined with '+'. cloud_offer is set when pages are
@@ -676,13 +686,13 @@ def _read_pdf(data, limit=_TEXT_LIMIT, ocr="auto"):
                 failed = 0
                 for index in empty:
                     try:
-                        text = _local_vlm_page(_page_png(doc, index, _OCR_DPI), url, model, key)
+                        text = _ocr_server_page(_page_png(doc, index, _OCR_DPI), url, model, key)
                     except requests.HTTPError:
                         failed += 1
                         continue
                     except (requests.ConnectionError, requests.Timeout) as exc:
                         # Unreachable: do not wait out the timeout once per page.
-                        notes.append(f"The internal OCR server is unreachable "
+                        notes.append(f"The OCR server is unreachable "
                                      f"({type(exc).__name__}); its remaining pages were skipped.")
                         break
                     except Exception:
@@ -690,11 +700,11 @@ def _read_pdf(data, limit=_TEXT_LIMIT, ocr="auto"):
                         continue
                     if _usable(text):
                         pages[index] = text.strip()
-                        _note_source(sources, "local-vlm")
+                        _note_source(sources, "ocr-server")
                 if failed:
                     notes.append(f"{failed} page(s) got no answer from {model}.")
             elif empty and not url:
-                notes.append("Internal OCR is not configured (M365_OCR_URL is empty).")
+                notes.append("No OCR server is configured (OCR_URL is empty).")
         finally:
             doc.close()
             if plumber is not None:
@@ -710,14 +720,14 @@ def _read_pdf(data, limit=_TEXT_LIMIT, ocr="auto"):
     cloud_offer = None
     vision_url, vision_model, vision_key = _vision_settings()
     vision_ready = bool(vision_url and vision_model and vision_key)
-    di_ready = bool(_env("AZURE_DOC_INTEL_ENDPOINT") and _env("AZURE_DOC_INTEL_KEY"))
+    di_ready = bool(_env("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT") and _env("AZURE_DOCUMENT_INTELLIGENCE_KEY"))
 
     if empty and ocr == "cloud":
         if di_ready:
             di_text, di_status = _azure_di(data)
             if di_status == "ok":
                 _place(pages, empty, di_text)
-                _note_source(sources, "azure-di")
+                _note_source(sources, "azure-document-intelligence")
             else:
                 notes.append("Azure Document Intelligence did not return text.")
             empty = [i for i, text in enumerate(pages) if text is None]
@@ -727,7 +737,7 @@ def _read_pdf(data, limit=_TEXT_LIMIT, ocr="auto"):
             except Exception:
                 doc = None
             if doc is None:
-                notes.append("Azure vision needs a rendered page, and pypdfium2 could not open the PDF.")
+                notes.append("The cloud vision model needs a rendered page, and pypdfium2 could not open the PDF.")
             else:
                 try:
                     failed = 0
@@ -735,26 +745,26 @@ def _read_pdf(data, limit=_TEXT_LIMIT, ocr="auto"):
                         if index >= len(doc):
                             continue
                         try:
-                            text = _azure_vision_page(
+                            text = _cloud_vision_page(
                                 _page_png(doc, index, _VISION_DPI), vision_url, vision_model, vision_key)
                         except Exception:
                             failed += 1
                             text = ""
                         if text.strip():
                             pages[index] = text.strip()
-                            _note_source(sources, "azure-vision")
+                            _note_source(sources, "cloud-vision")
                     if failed:
                         notes.append(f"{failed} page(s) got no answer from {vision_model}.")
                 finally:
                     doc.close()
         elif empty and not di_ready:
             notes.append("ocr='cloud' was asked for but no cloud model is configured "
-                         "(M365_VISION_URL, M365_VISION_MODEL, AZURE_SWEDEN_API_KEY).")
+                         "(OCR_CLOUD_URL, OCR_CLOUD_MODEL and OCR_CLOUD_API_KEY or OCR_CLOUD_API_KEY_ENV).")
     elif empty and ocr != "never" and (vision_ready or di_ready):
         cloud_offer = {
             "pages": _ranges(empty),
             "how": "Ask the user. Only if they agree, call m365_get again with the same path "
-                   "and ocr='cloud': these pages then go to Azure, outside this machine.",
+                   "and ocr='cloud': these pages then go to the cloud model, outside the organisation.",
         }
 
     parts = [text for text in pages if text]
