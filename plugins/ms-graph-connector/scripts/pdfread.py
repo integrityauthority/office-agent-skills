@@ -401,6 +401,12 @@ def read_pages(data, pages=None, ocr="auto", tables=True, ocr_limit=OCR_PAGES_PE
             doc.close()
 
     empty = [i for i in selected if not sources[i] and i not in deferred and i not in unrenderable]
+    # A short text layer (a cover page that says only "Annex") went to OCR as
+    # if it were a scan. If OCR found nothing better, keep what the page had
+    # rather than reporting it empty.
+    for i in selected:
+        if not sources[i] and texts.get(i, "").strip():
+            sources[i] = layer
     cloud_offer = None
     if empty and ocr in ("auto", "force") and (conf["cloud"] or conf["di"]):
         cloud_offer = {

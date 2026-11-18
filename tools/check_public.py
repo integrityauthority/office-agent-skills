@@ -84,7 +84,11 @@ CHECKS: list[tuple[str, re.Pattern[str]]] = [
 ]
 
 # Files that describe the patterns above and so would match themselves.
-SELF = {"tools/check_public.py"}
+SELF = {
+    "tools/check_public.py",
+    # Its tests feed it a sample of each finding on purpose.
+    "tests/test_check_public.py",
+}
 
 
 def allowed(kind: str, match: re.Match[str]) -> bool:
@@ -116,7 +120,13 @@ def denied_names(line: str) -> list[str]:
     hits = []
     for token in _TOKEN.findall(line):
         candidates = {token}
-        candidates.update(p for p in re.split(r"[._-]", token) if p)
+        parts = [p for p in re.split(r"[._-]", token) if p]
+        # Every run of consecutive parts, so a hyphenated denied name is found
+        # inside a longer token too (name-swap, NAME_LOCAL_URL).
+        for i in range(len(parts)):
+            for j in range(i + 1, len(parts) + 1):
+                for joiner in ("-", "_", "."):
+                    candidates.add(joiner.join(parts[i:j]))
         labels = token.split(".")
         candidates.update(".".join(labels[i:]) for i in range(len(labels) - 1))
         if any(_digest(c) in DENIED_DIGESTS for c in candidates):

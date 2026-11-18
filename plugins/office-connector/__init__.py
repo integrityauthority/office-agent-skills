@@ -69,8 +69,9 @@ def register(ctx):
     ctx.register_tool(
         "office_status", "office", NO_ARGS_SCHEMA, _status,
         description=(
-            "List which Office applications are running and which documents are "
-            "open: name, path, saved state, whether a backup is possible, any "
+            # First sentence under 60 characters: the catalogue cuts it there.
+            "Show running Office apps, open documents and Outlook. "
+            "For each document: name, path, saved state, whether a backup is possible, any "
             "crash-recovery warning, and for Word the revision state. Also "
             "classic Outlook: running, accounts, unread and draft counts. Call "
             "this first, and again whenever it is unclear what is active."

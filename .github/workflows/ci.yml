@@ -1,7 +1,6 @@
-# One check, the same one a maintainer runs locally: can every skill here
-# actually be published? A skill that fails this would be rejected by the
-# attachment store halfway through an upload, or would install with
-# instructions pointing at a file that never arrived.
+# Two jobs. "skills" is the check a maintainer runs before publishing: can
+# every skill be published, do the plugin copies match, and is nothing
+# internal about to become public. "tests" runs the test suite.
 name: ci
 
 on:
@@ -37,3 +36,18 @@ jobs:
           else
             python tools/check_public.py
           fi
+
+  tests:
+    # Every test builds its own PDFs, .msg and .eml files and runs a fake OCR
+    # server, so nothing here touches a real document, mailbox or model.
+    # Linux on purpose: file-reader and the shared PDF module must not depend
+    # on Windows. (office-live needs Windows and Office; it is checked
+    # statically in tests/test_plugins.py.)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install -r tests/requirements.txt
+      - run: python -m pytest -q

@@ -123,8 +123,10 @@ def register(ctx):
     ctx.register_tool(
         "m365_status", "m365", NO_ARGS_SCHEMA, _status,
         description=(
-            "Check whether the user is signed in to Microsoft 365 and which "
-            "permissions were granted. Call this before the first search, so a "
+            # The tool-search catalogue shows the first sentence, cut at 60
+            # characters; tests/test_plugins.py holds every tool to that.
+            "Check Microsoft 365 sign-in and granted permissions. "
+            "Call this before the first search, so a "
             "missing consent is reported rather than looking like an empty result."
         ),
         emoji="\N{IDENTIFICATION CARD}",
@@ -142,8 +144,9 @@ def register(ctx):
     ctx.register_tool(
         "m365_search", "m365", SEARCH_SCHEMA, _search,
         description=(
-            "Search the signed-in user's own Outlook mail, OneDrive and "
-            "SharePoint documents, Teams chats and calendar. Returns only what "
+            "Search your own M365 mail, files, Teams chats and calendar. "
+            "Covers the signed-in user's Outlook mail, OneDrive and SharePoint "
+            "documents, Teams chats and calendar. Returns only what "
             "that user can already see. Read-only."
         ),
         emoji="\N{LEFT-POINTING MAGNIFYING GLASS}",
@@ -152,6 +155,7 @@ def register(ctx):
     ctx.register_tool(
         "m365_get", "m365", GET_SCHEMA, _get,
         description=(
+            "Read OneDrive folders and files, or any Graph GET path. "
             "List a folder with /me/drive/root/children or /me/drive/items/<id>/children. "
             "The answer is count, folders and files; report those and do not recount. "
             "Read a Word, Excel or PDF file with /me/drive/items/<id>/content. "

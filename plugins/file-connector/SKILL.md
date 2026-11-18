@@ -1,7 +1,7 @@
 ---
 name: file-reader
 description: Read files on disk as text in one call — PDF (scanned pages go through OCR), Outlook .msg and .eml e-mails with their attachments, Word .docx, Excel .xlsx, PowerPoint .pptx, HTML and plain text. Read an attachment inside an e-mail without saving it, save attachments to a folder, or render PDF pages as images to look at. Use when the user points at a file path or an e-mail file ("olvasd el ezt a PDF-et", "mi van ebben a levélben", "nézd meg a mellékletet", "szkennelt PDF"). Do NOT use for a document the user has OPEN in Word, Excel or PowerPoint, or for mail in the running Outlook — that is office-live. Do NOT use for OneDrive or SharePoint files — that is m365-graph.
-version: 1.1.0
+version: 1.2.0
 author: Integritás Hatóság
 ---
 

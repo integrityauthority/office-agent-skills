@@ -1,0 +1,8 @@
+# What the tests need. The same libraries the plugins declare, plus pytest.
+pytest
+pypdfium2
+pdfplumber
+pdfminer.six
+olefile
+openpyxl
+pillow

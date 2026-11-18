@@ -153,6 +153,23 @@ pointing at a module that never arrived.
 CI runs the same command on every push, so a skill that cannot be published
 cannot be merged.
 
+Code more than one skill needs lives once, under `shared/` (today
+`shared/pdfread.py`, the PDF and OCR reader of file-reader and m365-graph).
+A skill is installed as one directory, so `tools/sync_plugins.py` copies the
+module into each skill's `scripts/` and each plugin; CI fails if a copy drifts.
+Edit `shared/`, never a copy.
+
+The tests build every file they read (PDF, `.msg`, `.eml`, Office) and run a
+fake OCR server, so they touch no real document, mailbox or model:
+
+```bash
+pip install -r tests/requirements.txt
+py -m pytest
+```
+
+Before a push, `py tools/check_public.py --commits origin/main..HEAD` checks
+your commits the way CI checks a pull request.
+
 Write the `SKILL.md` for the agent, not for a person. An instruction phrased as
 advice to a human reader ("export your token first") is read as an instruction
 to the agent, which will then ask the user for something it already has.
