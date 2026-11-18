@@ -20,13 +20,14 @@ locally (`text_source` is `docx`). A `.xlsx` is read locally (`xlsx`): the
 sheet name, then rows. A legacy `.doc` or `.xls` is not extracted; ask for
 the `.docx` or `.xlsx` copy.
 
-A PDF page with a text layer is read locally by pypdfium2 (`text_source`
-contains `text-layer`) and never leaves the machine. A scanned page goes to
-the internal llama-swap OCR model (`local-vlm`). Only if that page is still
-empty does the raw PDF go to Azure Document Intelligence (`azure-di`), and
-only if that call fails does pdfminer read the file locally (`pdfminer`).
-Pages that are still empty are sent as images to Azure OpenAI vision
-(`azure-vision`). Do not open the SharePoint link in the browser, and do
+A PDF is read in the same order as file-reader does it. A page with a text
+layer is read locally by pypdfium2 (`text_source` contains `text-layer`) and
+never leaves the machine. A scanned page always goes to the internal OCR
+server first (`local-vlm`). Nothing goes to Azure on its own: if pages are
+still empty, the answer has `cloud_ocr_needs_approval`. Ask the user; only if
+they agree, call `m365_get` again with the same path and `ocr="cloud"`. Then
+Azure Document Intelligence (`azure-di`, when configured) and Azure OpenAI
+vision (`azure-vision`) read the pages still empty. Do not open the SharePoint link in the browser, and do
 not call `/preview`: the browser viewer does not expose the text layer, and
 `/preview` returns 403.
 
@@ -47,8 +48,8 @@ is not used: it is AGPL-3.0.) That image goes to `M365_OCR_URL` (no default, set
 `deepseek-ai/DeepSeek-OCR-2`). Set `M365_OCR_URL` empty to skip the internal
 OCR. Azure Document Intelligence runs only when `AZURE_DOC_INTEL_ENDPOINT`
 and `AZURE_DOC_INTEL_KEY` are set and the local page was empty. Azure vision
-uses `M365_VISION_URL`, `M365_VISION_MODEL` and `AZURE_SWEDEN_API_KEY` for pages that are
-still empty. The Graph token is not sent with the file or the image.
+uses `M365_VISION_URL`, `M365_VISION_MODEL` and `AZURE_SWEDEN_API_KEY`. Both
+Azure steps run only with `ocr="cloud"`. The Graph token is not sent with the file or the image.
 
 Shorthand below: `mg` = `%LOCALAPPDATA%\hermes\hermes-agent\venv\Scripts\python.exe ${HERMES_SKILL_DIR}/scripts/microsoft_graph.py`
 

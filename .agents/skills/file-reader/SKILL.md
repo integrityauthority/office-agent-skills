@@ -40,12 +40,16 @@ follow the hint instead of retrying the same call.
 
 ## Scanned PDFs and where the pages go
 
+The same order as m365-graph:
+
 1. A page with a text layer is read on this machine. It never leaves it.
-2. A page without one is rendered and sent to the organisation's internal OCR
-   model (`M365_OCR_URL`). Ten pages per call; `notes` names the rest.
-3. Nothing goes to a cloud model unless you pass `ocr="cloud"`. When pages
-   stay empty, `notes` says so. Ask the user before using `ocr="cloud"`: the
-   page images then go to the Azure vision deployment.
+2. A page without one always goes to the organisation's internal OCR server
+   (`M365_OCR_URL`) first. Ten pages per call; `notes` names the rest.
+3. Nothing goes to a cloud model on its own. When pages stay empty and a
+   cloud model is configured, the answer has `cloud_ocr_needs_approval` with
+   the page numbers. Ask the user. Only if they agree, call again with
+   `ocr="cloud"`: the internal server is still tried first, and the pages it
+   leaves empty go as images to the Azure vision deployment.
 
 `ocr="never"` reads only the text layer. `ocr="force"` OCRs every requested
 page, for a PDF whose text layer is garbage.

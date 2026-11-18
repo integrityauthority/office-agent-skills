@@ -611,6 +611,17 @@ def _azure_vision_page(png, url, model, key):
     return _response_text(response.json())
 
 
+def _ranges(indexes):
+    """[0, 1, 2, 5] -> '1-3,6' (1-based), the same form file-reader uses."""
+    out = []
+    for i in sorted(indexes):
+        if out and i == out[-1][1] + 1:
+            out[-1][1] = i
+        else:
+            out.append([i, i])
+    return ",".join(f"{a + 1}" if a == b else f"{a + 1}-{b + 1}" for a, b in out)
+
+
 def _place(pages, indexes, text):
     """Put one recovered block on the first still-empty page."""
     if not indexes:
@@ -620,12 +631,21 @@ def _place(pages, indexes, text):
         pages[index] = ""
 
 
-def _read_pdf(data, limit=_TEXT_LIMIT):
-    """Text layer, then local VLM, Azure DI, pdfminer, then Azure vision.
+def _read_pdf(data, limit=_TEXT_LIMIT, ocr="auto"):
+    """Read a PDF the same way file-reader does.
 
-    Returns (text, text_source, note). text_source names every layer that
-    contributed, joined with '+'. A text layer stays on this machine.
+    1. the text layer, locally;
+    2. the internal OCR server (M365_OCR_URL) for pages without one, always;
+    3. pdfminer.six, locally, when pypdfium2 could not open the file;
+    4. only with ocr="cloud", which the agent passes after the user agreed:
+       Azure Document Intelligence, then Azure vision, for pages still empty.
+
+    Returns (text, text_source, note, cloud_offer). text_source names every
+    layer that contributed, joined with '+'. cloud_offer is set when pages are
+    still empty and a cloud model could read them.
     """
+    import requests
+
     notes = []
     sources = []
     pages = []
@@ -657,45 +677,51 @@ def _read_pdf(data, limit=_TEXT_LIMIT):
                 for index in empty:
                     try:
                         text = _local_vlm_page(_page_png(doc, index, _OCR_DPI), url, model, key)
+                    except requests.HTTPError:
+                        failed += 1
+                        continue
+                    except (requests.ConnectionError, requests.Timeout) as exc:
+                        # Unreachable: do not wait out the timeout once per page.
+                        notes.append(f"The internal OCR server is unreachable "
+                                     f"({type(exc).__name__}); its remaining pages were skipped.")
+                        break
                     except Exception:
                         failed += 1
-                        text = ""
+                        continue
                     if _usable(text):
                         pages[index] = text.strip()
                         _note_source(sources, "local-vlm")
                 if failed:
                     notes.append(f"{failed} page(s) got no answer from {model}.")
             elif empty and not url:
-                notes.append("Local OCR is turned off (M365_OCR_URL is empty).")
+                notes.append("Internal OCR is not configured (M365_OCR_URL is empty).")
         finally:
             doc.close()
             if plumber is not None:
                 plumber.close()
     else:
         pages = [None]
+        miner = _pdfminer_text(data)
+        if miner:
+            _place(pages, [0], miner)
+            _note_source(sources, "pdfminer")
 
     empty = [i for i, text in enumerate(pages) if text is None]
-    if empty:
-        di_text, di_status = _azure_di(data)
-        if di_status == "ok":
-            _place(pages, empty, di_text)
-            _note_source(sources, "azure-di")
-        elif di_status == "fail":
-            notes.append("Azure Document Intelligence did not return text.")
-            miner = _pdfminer_text(data)
-            if miner:
-                _place(pages, empty, miner)
-                _note_source(sources, "pdfminer")
-            else:
-                notes.append("pdfminer.six found no text layer either.")
-        empty = [i for i, text in enumerate(pages) if text is None]
+    cloud_offer = None
+    vision_url, vision_model, vision_key = _vision_settings()
+    vision_ready = bool(vision_url and vision_model and vision_key)
+    di_ready = bool(_env("AZURE_DOC_INTEL_ENDPOINT") and _env("AZURE_DOC_INTEL_KEY"))
 
-    if empty:
-        url, model, key = _vision_settings()
-        if not (url and model and key):
-            notes.append("Azure vision is not configured (M365_VISION_URL, M365_VISION_MODEL "
-                         "or AZURE_SWEDEN_API_KEY is empty).")
-        else:
+    if empty and ocr == "cloud":
+        if di_ready:
+            di_text, di_status = _azure_di(data)
+            if di_status == "ok":
+                _place(pages, empty, di_text)
+                _note_source(sources, "azure-di")
+            else:
+                notes.append("Azure Document Intelligence did not return text.")
+            empty = [i for i, text in enumerate(pages) if text is None]
+        if empty and vision_ready:
             try:
                 doc = _pdf_open(data)
             except Exception:
@@ -710,7 +736,7 @@ def _read_pdf(data, limit=_TEXT_LIMIT):
                             continue
                         try:
                             text = _azure_vision_page(
-                                _page_png(doc, index, _VISION_DPI), url, model, key)
+                                _page_png(doc, index, _VISION_DPI), vision_url, vision_model, vision_key)
                         except Exception:
                             failed += 1
                             text = ""
@@ -718,15 +744,24 @@ def _read_pdf(data, limit=_TEXT_LIMIT):
                             pages[index] = text.strip()
                             _note_source(sources, "azure-vision")
                     if failed:
-                        notes.append(f"{failed} page(s) got no answer from {model}.")
+                        notes.append(f"{failed} page(s) got no answer from {vision_model}.")
                 finally:
                     doc.close()
+        elif empty and not di_ready:
+            notes.append("ocr='cloud' was asked for but no cloud model is configured "
+                         "(M365_VISION_URL, M365_VISION_MODEL, AZURE_SWEDEN_API_KEY).")
+    elif empty and ocr != "never" and (vision_ready or di_ready):
+        cloud_offer = {
+            "pages": _ranges(empty),
+            "how": "Ask the user. Only if they agree, call m365_get again with the same path "
+                   "and ocr='cloud': these pages then go to Azure, outside this machine.",
+        }
 
     parts = [text for text in pages if text]
     text = "\n\n".join(parts).strip()[:limit]
-    if not text and not notes:
+    if not text and not notes and not cloud_offer:
         notes.append("The file is saved locally and no layer returned text.")
-    return text, "+".join(sources), " ".join(n for n in notes if n)
+    return text, "+".join(sources), " ".join(n for n in notes if n), cloud_offer
 
 
 def _compact_children(path, payload):
@@ -870,7 +905,7 @@ def _read_xlsx(data, limit):
     return text[:limit], " ".join(notes)
 
 
-def _download_drive_content(path, timeout):
+def _download_drive_content(path, timeout, ocr="auto"):
     """GET a drive item's /content.
 
     Graph answers with a redirect to a pre-authenticated SharePoint URL and
@@ -923,8 +958,9 @@ def _download_drive_content(path, timeout):
     text = ""
     source = ""
     ocr_note = ""
+    cloud_offer = None
     if kind == "pdf":
-        text, source, ocr_note = _read_pdf(data)
+        text, source, ocr_note, cloud_offer = _read_pdf(data, ocr=ocr)
     elif kind == "docx":
         try:
             text = _read_docx(data, _TEXT_LIMIT)
@@ -963,11 +999,13 @@ def _download_drive_content(path, timeout):
             "Do not open a SharePoint or download URL in the browser, "
             "and do not call /preview."
         )
+    if cloud_offer:
+        result["cloud_ocr_needs_approval"] = cloud_offer
     return result
 
 
 def graph(method, path, *, params=None, body=None, allow_write=None,
-          headers=None, timeout=60, all_pages=False, page_cap=10):
+          headers=None, timeout=60, all_pages=False, page_cap=10, ocr="auto"):
     """Call Microsoft Graph. Reads are open; writes must be named explicitly.
 
     Import this from execute_code to go beyond the typed commands:
@@ -999,7 +1037,7 @@ def graph(method, path, *, params=None, body=None, allow_write=None,
         if not any(str(key).lower() == "$top" for key in params):
             params["$top"] = "50"
     if method == "GET" and path.rstrip("/").endswith("/content"):
-        return _download_drive_content(path, timeout)
+        return _download_drive_content(path, timeout, ocr=ocr)
 
     if method != "GET":
         if path == "/$batch":
@@ -1343,7 +1381,7 @@ def cmd_calendar_add(a):
 
 def cmd_get(a):
     params = dict(p.split("=", 1) for p in (a.param or []))
-    out(graph("GET", a.path, params=params or None, all_pages=a.all))
+    out(graph("GET", a.path, params=params or None, all_pages=a.all, ocr=a.ocr))
 
 
 # ------------------------------------------------------------------- cli ----
@@ -1405,6 +1443,8 @@ def build_parser():
     g.add_argument("path")
     g.add_argument("--param", action="append", help='repeatable: $top=5')
     g.add_argument("--all", action="store_true", help="follow nextLink (max 10 pages)")
+    g.add_argument("--ocr", default="auto", choices=["auto", "never", "cloud"],
+                   help="cloud: also Azure for scanned pages; only after the user agreed")
     g.set_defaults(func=cmd_get)
 
     return p

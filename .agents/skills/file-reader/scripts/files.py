@@ -438,46 +438,62 @@ def read_pdf(data, pages=None, ocr="auto", max_chars=TEXT_LIMIT):
     else:
         need = [i for i in selected if not source[i]]
 
+    # The order is the same as in m365-graph: the internal OCR server first,
+    # always; the cloud model only for pages still empty, and only when the
+    # caller passes ocr="cloud" after the user agreed.
     settings = ocr_settings()
     ocr_skipped = []
+    unrendered = []
     if need and doc is None:
-        ocr_skipped = need
+        unrendered = need  # no pypdfium2: nothing can be sent to any OCR
     elif need:
-        engine = None
+        engines = []
+        if settings["local"]:
+            engines.append(("local-ocr", settings["local"], _ocr_local, OCR_DPI))
+        else:
+            notes.append("Internal OCR is not configured (M365_OCR_URL is empty).")
         if ocr == "cloud":
-            engine = ("azure-vision", settings["cloud"], _ocr_cloud, VISION_DPI)
-            if not settings["cloud"]:
+            if settings["cloud"]:
+                engines.append(("azure-vision", settings["cloud"], _ocr_cloud, VISION_DPI))
+            else:
                 notes.append("ocr='cloud' was asked for but M365_VISION_URL, M365_VISION_MODEL "
                              "or AZURE_SWEDEN_API_KEY is not set.")
-        else:
-            engine = ("local-ocr", settings["local"], _ocr_local, OCR_DPI)
-            if not settings["local"]:
-                notes.append("Local OCR is not configured (M365_OCR_URL is empty).")
-        label, config, call, dpi = engine
-        if config:
+        if engines:
             todo, ocr_skipped = need[:OCR_PAGES_PER_CALL], need[OCR_PAGES_PER_CALL:]
-            failed = []
-            for index in todo:
-                try:
-                    text = call(_page_png(doc, index, dpi), *config)
-                except (urllib.error.URLError, OSError, ValueError) as exc:
-                    failed.append(f"{index + 1} ({type(exc).__name__}: {str(exc)[:80]})")
-                    continue
-                if len(text.strip()) >= PAGE_TEXT_MIN or (ocr == "force" and text.strip()):
-                    texts[index] = text.strip()
-                    source[index] = label
-            if failed:
-                notes.append(f"{label} gave no answer for page(s) {', '.join(failed)}.")
+            done = set()
+            for label, config, call, dpi in engines:
+                failed = []
+                for index in [i for i in todo if i not in done]:
+                    try:
+                        text = call(_page_png(doc, index, dpi), *config)
+                    except urllib.error.HTTPError as exc:
+                        failed.append(f"{index + 1} (HTTP {exc.code})")
+                        continue
+                    except (urllib.error.URLError, OSError, ValueError) as exc:
+                        # Unreachable server: stop here instead of waiting out
+                        # the timeout once per page.
+                        notes.append(f"{label} is unreachable ({type(exc).__name__}: "
+                                     f"{str(exc)[:80]}); its remaining pages were skipped.")
+                        break
+                    if len(text.strip()) >= PAGE_TEXT_MIN or (ocr == "force" and text.strip()):
+                        texts[index] = text.strip()
+                        source[index] = label
+                        done.add(index)
+                if failed:
+                    notes.append(f"{label} gave no answer for page(s) {', '.join(failed)}.")
         else:
-            ocr_skipped = need
+            pass  # no OCR engine: the pages stay empty, the cloud offer below applies
     if doc is not None:
         doc.close()
 
-    empty = [i for i in selected if not source[i]]
-    if empty and ocr != "cloud" and settings["cloud"]:
-        notes.append(
-            f"Page(s) {_ranges(empty)} have no text. ocr='cloud' would send them as images "
-            "to the Azure vision deployment; ask the user first, it leaves this machine.")
+    empty = [i for i in selected if not source[i] and i not in ocr_skipped and i not in unrendered]
+    cloud_offer = None
+    if empty and ocr != "cloud" and ocr != "never" and settings["cloud"]:
+        cloud_offer = {
+            "pages": _ranges(empty),
+            "how": "Ask the user. Only if they agree, call again with ocr='cloud': these pages "
+                   "then go as images to the Azure vision deployment, outside this machine.",
+        }
 
     parts = []
     for index in selected:
@@ -497,6 +513,8 @@ def read_pdf(data, pages=None, ocr="auto", max_chars=TEXT_LIMIT):
         "text": text,
         "truncated": truncated,
     }
+    if cloud_offer:
+        result["cloud_ocr_needs_approval"] = cloud_offer
     if truncated:
         shown = full[:max_chars].count("--- page ")
         rest = selected[max(shown - 1, 0):]

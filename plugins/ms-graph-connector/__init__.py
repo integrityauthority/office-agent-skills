@@ -53,6 +53,12 @@ GET_SCHEMA = {
             "type": "object",
             "description": "Optional query string parameters, for example {\"$top\": 5}.",
         },
+        "ocr": {
+            "type": "string",
+            "enum": ["auto", "never", "cloud"],
+            "description": "For a PDF /content. auto: text layer, then the internal OCR server. "
+                           "cloud: also Azure for pages still empty; only after the user agreed.",
+        },
     },
     "required": ["path"],
 }
@@ -92,9 +98,10 @@ def register(ctx):
         kinds = [t.strip() for t in types.split(",") if t.strip()] or None
         return json.dumps(mg.search(query, types=kinds, top=top), ensure_ascii=False, default=str)
 
-    def m365_get(path: str, params: dict | None = None) -> str:
+    def m365_get(path: str, params: dict | None = None, ocr: str = "auto") -> str:
         """Any Microsoft Graph GET. Writes are refused inside the module."""
-        return json.dumps(mg.graph("GET", path, params=params), ensure_ascii=False, default=str)
+        return json.dumps(mg.graph("GET", path, params=params, ocr=ocr or "auto"),
+                          ensure_ascii=False, default=str)
 
     # Same contract as every Hermes plugin tool: handler(args_dict, **context).
     # The typed functions above stay the implementation; these unpack for the
@@ -111,7 +118,7 @@ def register(ctx):
 
     def _get(args=None, **_):
         a = args or {}
-        return m365_get(a.get("path", ""), a.get("params"))
+        return m365_get(a.get("path", ""), a.get("params"), a.get("ocr") or "auto")
 
     ctx.register_tool(
         "m365_status", "m365", NO_ARGS_SCHEMA, _status,
