@@ -17,8 +17,9 @@ provides_tools:
   - file_render
 
 # All permissive licences: pypdfium2 (Apache-2.0/BSD-3), pdfminer.six (MIT),
-# pdfplumber (MIT, tables), olefile (BSD-2), openpyxl (MIT), pillow (HPND). Word, PowerPoint, .eml,
-# HTML and text are read with the standard library.
+# pdfplumber (MIT, tables), olefile (BSD-2), openpyxl (MIT), pillow (HPND),
+# azure-ai-documentintelligence (MIT; called only when its endpoint is set).
+# Word, PowerPoint, .eml, HTML and text are read with the standard library.
 python_dependencies:
   - pypdfium2
   - pdfminer.six
@@ -26,6 +27,7 @@ python_dependencies:
   - olefile
   - openpyxl
   - pillow
+  - azure-ai-documentintelligence
 
 # OCR, shared with the other plugins in this repository (see the README,
 # "Configuration"). All optional: without them scanned PDF pages stay empty.
@@ -37,3 +39,5 @@ optional_env:
   - OCR_CLOUD_MODEL
   - OCR_CLOUD_API_KEY
   - OCR_CLOUD_API_KEY_ENV
+  - AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT
+  - AZURE_DOCUMENT_INTELLIGENCE_KEY
