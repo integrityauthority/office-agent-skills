@@ -13,9 +13,10 @@ them from a URL.
 |---|---|---|
 | [`office-live`](.agents/skills/office-live) | Reads and edits the Word, Excel or PowerPoint document the user has **open**, over COM. Word edits land as tracked revisions. | Windows, Office, `pywin32` |
 | [`m365-graph`](.agents/skills/m365-graph) | Searches the signed-in user's own Outlook mail, OneDrive and SharePoint documents, Teams chats and calendar, through the Microsoft Graph REST API. Read-only by default. | `msal`, a work or school account |
+| [`file-reader`](.agents/skills/file-reader) | Reads files on disk in one call: PDF (scanned pages through an OCR model you configure), Outlook `.msg` and `.eml` e-mails with their attachments, Word, Excel, PowerPoint, HTML, text. Read-only. | `pypdfium2`, `olefile`; any OS |
 
-Both are Windows-and-Microsoft specific, which is why they live here rather
-than upstream in any one agent's repository.
+The first two are Windows-and-Microsoft specific, which is why they live here
+rather than upstream in any one agent's repository.
 
 > ### Read this before pointing them at real work
 >
@@ -82,7 +83,7 @@ apb pull <playbook-guid> --apply      # writes .agents/skills/, scripts included
 
 ## As Hermes plugins
 
-The same code is also packaged as two [Hermes Agent](https://hermes-agent.nousresearch.com)
+The same code is also packaged as three [Hermes Agent](https://hermes-agent.nousresearch.com)
 plugins, so a colleague installs one thing instead of copying folders and
 editing `config.yaml`:
 
@@ -90,10 +91,12 @@ editing `config.yaml`:
 |---|---|---|
 | `office-connector` | Work in the Word, Excel and PowerPoint documents you already have open | `office_status`, `office_exec`, `office_reset` |
 | `ms-graph-connector` | Read your own Microsoft 365: Outlook mail, OneDrive and SharePoint files, Teams chats, calendar | `m365_status`, `m365_login`, `m365_search`, `m365_get` |
+| `file-connector` | Read PDF (with OCR for scanned pages), .msg and .eml e-mails with attachments, Word, Excel and PowerPoint files from disk | `file_read`, `file_attachments`, `file_render` |
 
 ```bash
 hermes plugins install integrityauthority/office-agent-skills#plugins/office-connector
 hermes plugins install integrityauthority/office-agent-skills#plugins/ms-graph-connector
+hermes plugins install integrityauthority/office-agent-skills#plugins/file-connector
 ```
 
 Both pass `hermes plugins validate`, the catalogue admission gate.
@@ -205,7 +208,11 @@ What does not happen: `office-live` makes **no outbound network calls at all**,
 neither skill reports telemetry anywhere, and no credential is stored by them
 (`m365-graph` uses MSAL's own token cache and never sees a password). Nothing
 is sent to a model by the skills themselves — whatever the agent reads enters
-its context, and where that goes is decided by the model you configured.
+its context, and where that goes is decided by the model you configured. The
+one exception is OCR: a scanned PDF page with no text layer is sent as an
+image to the OCR endpoint named in `M365_OCR_URL`, if one is set, and to the
+vision deployment in `M365_VISION_URL` only when `file-reader` is called with
+`ocr="cloud"`. A page with a text layer is always read locally.
 
 `office.py --warm` keeps a background process holding the COM objects between
 calls, because cold-starting COM costs a third of a second each time. It binds

@@ -37,6 +37,7 @@ ROOT = Path(__file__).resolve().parent.parent
 PAIRS = {
     "office-connector": "office-live",
     "ms-graph-connector": "m365-graph",
+    "file-connector": "file-reader",
 }
 
 # What travels. Anything else in a skill directory stays there.

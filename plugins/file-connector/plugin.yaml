@@ -1,0 +1,26 @@
+manifest_version: 2
+name: file-connector
+version: 1.0.0
+description: >-
+  Let Hermes read files from disk in one call: PDF (scanned pages through the
+  organisation's OCR model), Outlook .msg and .eml e-mails with their
+  attachments, Word, Excel, PowerPoint, HTML and text. Reads an attachment in
+  place, saves attachments to a folder, renders PDF pages for a vision model.
+  Read-only; a page with a text layer never leaves the machine.
+author: Integritas Hatosag
+kind: standalone
+
+provides_tools:
+  - file_read
+  - file_attachments
+  - file_render
+
+# All permissive licences: pypdfium2 (Apache-2.0/BSD-3), pdfminer.six (MIT),
+# olefile (BSD-2), openpyxl (MIT), pillow (HPND). Word, PowerPoint, .eml,
+# HTML and text are read with the standard library.
+python_dependencies:
+  - pypdfium2
+  - pdfminer.six
+  - olefile
+  - openpyxl
+  - pillow
