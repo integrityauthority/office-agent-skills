@@ -1,7 +1,7 @@
 ---
 name: m365-graph
 description: Search and read the organisation's Microsoft 365 content — Outlook mail, SharePoint and OneDrive documents, Teams chats, the user's calendar — through Microsoft Graph with the signed-in user's own delegated permissions. List the signed-in user's OneDrive with /me/drive/root/children, open a folder from that list, and read a Word, Excel or PDF file with /me/drive/items/<id>/content. Use when the user asks to find something that lives in the cloud rather than on this machine ("keresd meg a levelet", "mi van a OneDrive-omon", "mit ír a dokumentum"). Do NOT use for a document the user has OPEN in Word/Excel/PowerPoint — that is the office-live skill. Do NOT use for local files.
-version: 1.0.0
+version: 2.0.0
 author: Integritás Hatóság
 platforms: [windows]
 ---
