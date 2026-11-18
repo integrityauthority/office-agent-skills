@@ -20,7 +20,7 @@ locally (`text_source` is `docx`). A `.xlsx` is read locally (`xlsx`): the
 sheet name, then rows. A legacy `.doc` or `.xls` is not extracted; ask for
 the `.docx` or `.xlsx` copy.
 
-A PDF page with a text layer is read locally by PyMuPDF (`text_source`
+A PDF page with a text layer is read locally by pypdfium2 (`text_source`
 contains `text-layer`) and never leaves the machine. A scanned page goes to
 the internal llama-swap OCR model (`local-vlm`). Only if that page is still
 empty does the raw PDF go to Azure Document Intelligence (`azure-di`), and
@@ -39,10 +39,11 @@ already see. There is no service account and no tenant-wide access — if they
 cannot open a site, neither can you.
 
 Runs on the interpreter Hermes already uses; `msal`, `requests`, `python-docx`,
-`openpyxl`, `pymupdf` (`>=1.26.6,<2`), `pdfminer.six` and
+`openpyxl`, `pypdfium2`, `pdfplumber`, `pdfminer.six` and
 `azure-ai-documentintelligence` are installed there. python-docx reads a
-`.docx`, openpyxl reads a `.xlsx`. PyMuPDF reads a PDF text layer and any
-table locally, and renders a scanned page. That image goes to `M365_OCR_URL` (no default, set by the installer; model `M365_OCR_MODEL`, default
+`.docx`, openpyxl reads a `.xlsx`. pypdfium2 reads a PDF text layer and
+renders a scanned page, pdfplumber adds any table, both locally. (PyMuPDF
+is not used: it is AGPL-3.0.) That image goes to `M365_OCR_URL` (no default, set by the installer; model `M365_OCR_MODEL`, default
 `deepseek-ai/DeepSeek-OCR-2`). Set `M365_OCR_URL` empty to skip the internal
 OCR. Azure Document Intelligence runs only when `AZURE_DOC_INTEL_ENDPOINT`
 and `AZURE_DOC_INTEL_KEY` are set and the local page was empty. Azure vision

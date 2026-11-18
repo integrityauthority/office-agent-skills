@@ -74,7 +74,8 @@ read_file(r"C:\path\file.pdf", pages="1-3")
 or from a terminal: `py scripts/files.py read <path> [--pages 1-3] [--attachment 2]`,
 `attachments <path>`, `render <path> --pages 1`, `status`.
 
-Libraries: pypdfium2 (PDF text and rendering), pdfminer.six (text fallback),
+Libraries: pypdfium2 (PDF text and rendering), pdfplumber (tables, optional),
+pdfminer.six (text fallback),
 olefile (.msg), openpyxl (.xlsx). Word, PowerPoint, .eml, HTML and text need
 nothing beyond Python. `status` lists what is installed and whether OCR is
 configured.

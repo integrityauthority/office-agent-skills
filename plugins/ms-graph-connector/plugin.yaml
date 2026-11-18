@@ -23,7 +23,10 @@ python_dependencies:
   - requests
   - python-docx
   - openpyxl
-  - pymupdf>=1.26.6,<2
+  # PDF: permissive licences only. PyMuPDF (AGPL-3.0) is deliberately not used.
+  - pypdfium2
+  - pdfplumber
+  - pillow
   - pdfminer.six
   - azure-ai-documentintelligence
 

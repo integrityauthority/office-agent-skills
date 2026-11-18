@@ -375,28 +375,62 @@ def _usable(text):
     return len((text or "").strip()) >= _PAGE_TEXT_MIN
 
 
-def _pymupdf_page_text(page):
-    """Text plus any table the page already has. Stays on this machine."""
-    text = (page.get_text("text") or "").strip()
-    tables = []
+# PDF engines are permissively licensed on purpose: pypdfium2 (Apache-2.0 /
+# BSD-3) for text and rendering, pdfplumber (MIT) for tables when installed.
+# PyMuPDF would do both, but it is AGPL-3.0, which this MIT repository does
+# not ship against.
+
+def _pdf_open(data):
+    import pypdfium2
+    return pypdfium2.PdfDocument(data)
+
+
+def _plumber_open(data):
+    """pdfplumber for table extraction, or None when it is not installed."""
+    import io
     try:
-        found = page.find_tables()
-        for table in getattr(found, "tables", None) or []:
-            rows = []
-            for row in table.extract() or []:
-                rows.append("\t".join((cell or "").strip() for cell in row))
-            block = "\n".join(row for row in rows if row.strip())
-            if block:
-                tables.append(block)
+        import pdfplumber
+        return pdfplumber.open(io.BytesIO(data))
     except Exception:
-        pass
+        return None
+
+
+def _page_text(doc, index, plumber=None):
+    """Text plus any table the page already has. Stays on this machine."""
+    page = doc[index]
+    try:
+        textpage = page.get_textpage()
+        try:
+            text = (textpage.get_text_bounded() or "").replace("\r\n", "\n").strip()
+        finally:
+            textpage.close()
+    finally:
+        page.close()
+    tables = []
+    if plumber is not None and index < len(plumber.pages):
+        try:
+            for table in plumber.pages[index].extract_tables() or []:
+                rows = ["\t".join((cell or "").strip() for cell in row) for row in table or []]
+                block = "\n".join(row for row in rows if row.strip())
+                if block:
+                    tables.append(block)
+        except Exception:
+            pass
     if tables:
         text = (text + "\n\n" + "\n\n".join(tables)).strip()
     return text
 
 
-def _page_png(page, dpi):
-    return page.get_pixmap(dpi=dpi).tobytes("png")
+def _page_png(doc, index, dpi):
+    import io
+    page = doc[index]
+    try:
+        image = page.render(scale=dpi / 72).to_pil()
+    finally:
+        page.close()
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
 
 
 def _pdfminer_text(data):
@@ -478,7 +512,26 @@ def _local_vlm_page(png, url, model, key):
         },
     )
     response.raise_for_status()
-    return _chat_text(response.json())
+    return _clean_ocr(_chat_text(response.json()))
+
+
+def _clean_ocr(text):
+    """DeepSeek-OCR's grounding mode tags each block with a label and a box,
+    and returns tables as HTML. Keep the words; one table row per line."""
+    import html as _html
+    text = re.sub(r"<\|det\|>.*?<\|/det\|>", "", text, flags=re.S)
+    text = re.sub(r"<\|ref\|>.*?<\|/ref\|>", "", text, flags=re.S)
+    text = re.sub(r"<\|[^|>]{1,40}\|>", "", text)
+
+    def table(match):
+        rows = []
+        for row in re.findall(r"<tr\b.*?</tr>", match.group(0), flags=re.S | re.I):
+            cells = re.findall(r"<t[dh]\b[^>]*>(.*?)</t[dh]>", row, flags=re.S | re.I)
+            rows.append("\t".join(_html.unescape(re.sub(r"<[^>]+>", "", c)).strip() for c in cells))
+        return "\n" + "\n".join(r for r in rows if r.strip()) + "\n"
+
+    text = re.sub(r"<table\b.*?</table>", table, text, flags=re.S | re.I)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
 def _azure_di(data):
@@ -578,12 +631,12 @@ def _read_pdf(data, limit=_TEXT_LIMIT):
     pages = []
     doc = None
     try:
-        import fitz
-        doc = fitz.open(stream=data, filetype="pdf")
+        doc = _pdf_open(data)
     except Exception as exc:
-        notes.append(f"PyMuPDF could not open the PDF ({type(exc).__name__}).")
+        notes.append(f"pypdfium2 could not open the PDF ({type(exc).__name__}).")
 
     if doc is not None:
+        plumber = _plumber_open(data)
         try:
             total = len(doc)
             count = min(total, _OCR_MAX_PAGES)
@@ -591,7 +644,7 @@ def _read_pdf(data, limit=_TEXT_LIMIT):
                 notes.append(f"Read the first {count} of {total} pages.")
             empty = []
             for index in range(count):
-                body = _pymupdf_page_text(doc[index])
+                body = _page_text(doc, index, plumber)
                 if _usable(body):
                     pages.append(body)
                     _note_source(sources, "text-layer")
@@ -603,7 +656,7 @@ def _read_pdf(data, limit=_TEXT_LIMIT):
                 failed = 0
                 for index in empty:
                     try:
-                        text = _local_vlm_page(_page_png(doc[index], _OCR_DPI), url, model, key)
+                        text = _local_vlm_page(_page_png(doc, index, _OCR_DPI), url, model, key)
                     except Exception:
                         failed += 1
                         text = ""
@@ -616,6 +669,8 @@ def _read_pdf(data, limit=_TEXT_LIMIT):
                 notes.append("Local OCR is turned off (M365_OCR_URL is empty).")
         finally:
             doc.close()
+            if plumber is not None:
+                plumber.close()
     else:
         pages = [None]
 
@@ -637,16 +692,16 @@ def _read_pdf(data, limit=_TEXT_LIMIT):
 
     if empty:
         url, model, key = _vision_settings()
-        if not key:
-            notes.append("Azure vision is not configured (AZURE_SWEDEN_API_KEY is empty).")
+        if not (url and model and key):
+            notes.append("Azure vision is not configured (M365_VISION_URL, M365_VISION_MODEL "
+                         "or AZURE_SWEDEN_API_KEY is empty).")
         else:
             try:
-                import fitz
-                doc = fitz.open(stream=data, filetype="pdf")
+                doc = _pdf_open(data)
             except Exception:
                 doc = None
             if doc is None:
-                notes.append("Azure vision needs a rendered page, and PyMuPDF could not open the PDF.")
+                notes.append("Azure vision needs a rendered page, and pypdfium2 could not open the PDF.")
             else:
                 try:
                     failed = 0
@@ -655,7 +710,7 @@ def _read_pdf(data, limit=_TEXT_LIMIT):
                             continue
                         try:
                             text = _azure_vision_page(
-                                _page_png(doc[index], _VISION_DPI), url, model, key)
+                                _page_png(doc, index, _VISION_DPI), url, model, key)
                         except Exception:
                             failed += 1
                             text = ""

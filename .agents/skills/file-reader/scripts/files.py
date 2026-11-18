@@ -250,6 +250,32 @@ def _pdfium():
         return None
 
 
+def _plumber_open(data):
+    """pdfplumber (MIT) for tables, or None when it is not installed."""
+    try:
+        import pdfplumber
+        return pdfplumber.open(io.BytesIO(data))
+    except Exception:
+        return None
+
+
+def _plumber_tables(plumber, index):
+    """A page's tables as tab-separated rows; empty when there are none."""
+    if plumber is None or index >= len(plumber.pages):
+        return ""
+    blocks = []
+    try:
+        for table in plumber.pages[index].extract_tables() or []:
+            rows = ["\t".join((cell or "").replace("\n", " ").strip() for cell in row)
+                    for row in table or []]
+            block = "\n".join(row for row in rows if row.strip())
+            if block:
+                blocks.append(block)
+    except Exception:
+        return ""
+    return "\n\n".join(blocks)
+
+
 def _page_png(pdfium_doc, index, dpi):
     page = pdfium_doc[index]
     try:
@@ -378,16 +404,24 @@ def read_pdf(data, pages=None, ocr="auto", max_chars=TEXT_LIMIT):
 
     texts = {}
     if doc is not None:
-        for index in selected:
-            page = doc[index]
-            try:
-                textpage = page.get_textpage()
+        plumber = _plumber_open(data)
+        try:
+            for index in selected:
+                page = doc[index]
                 try:
-                    texts[index] = textpage.get_text_bounded().replace("\r\n", "\n").strip()
+                    textpage = page.get_textpage()
+                    try:
+                        texts[index] = textpage.get_text_bounded().replace("\r\n", "\n").strip()
+                    finally:
+                        textpage.close()
                 finally:
-                    textpage.close()
-            finally:
-                page.close()
+                    page.close()
+                tables = _plumber_tables(plumber, index) if len(texts[index]) >= PAGE_TEXT_MIN else ""
+                if tables:
+                    texts[index] += "\n\n[tables]\n" + tables
+        finally:
+            if plumber is not None:
+                plumber.close()
     else:
         mined = _pdfminer_pages(data, selected)
         if mined is None:
@@ -899,6 +933,7 @@ def status():
         "readers": {
             "pdf_text_and_render": "pypdfium2" if has("pypdfium2") else None,
             "pdf_text_fallback": "pdfminer.six" if has("pdfminer") else None,
+            "pdf_tables": "pdfplumber" if has("pdfplumber") else None,
             "msg": "olefile" if has("olefile") else None,
             "xlsx": "openpyxl" if has("openpyxl") else None,
             "docx_pptx_eml_html_text": "standard library",
