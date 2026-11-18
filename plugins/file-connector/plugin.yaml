@@ -12,6 +12,7 @@ kind: standalone
 
 provides_tools:
   - file_read
+  - file_find
   - file_attachments
   - file_render
 

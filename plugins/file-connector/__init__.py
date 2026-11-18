@@ -53,6 +53,27 @@ RENDER_SCHEMA = {
     "required": ["path"],
 }
 
+FIND_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "path": {"type": "string", "description": "Full path of a file, or of a folder to search "
+                                                  "every readable file in it."},
+        "query": {"type": "string", "description": "Words to find. Case and accents are ignored and "
+                                                   "any whitespace may separate the words."},
+        "regex": {"type": "boolean", "description": "Treat query as a regular expression, e.g. "
+                                                    "'kifejezés1|kifejezés2'."},
+        "exact": {"type": "boolean", "description": "Case and accents must match."},
+        "pages": {"type": "string", "description": "PDF pages to search, e.g. '1-20'. Default: all."},
+        "ocr": {"type": "string", "enum": ["auto", "never", "cloud"],
+                "description": "One file only. auto: scanned pages go through your OCR server first. "
+                               "cloud only after the user agreed."},
+        "attachment": {"type": "string", "description": "Search only this attachment of an .msg/.eml."},
+        "recursive": {"type": "boolean", "description": "Folder: include subfolders."},
+        "max_hits": {"type": "integer", "description": "Matches (or files) to return. Default 50."},
+    },
+    "required": ["path", "query"],
+}
+
 
 def register(ctx):
     if str(_SCRIPTS) not in sys.path:
@@ -75,6 +96,25 @@ def register(ctx):
         a = args or {}
         return files.run(files.render_pages, a.get("path"), pages=a.get("pages") or "1",
                          dpi=a.get("dpi") or 150, attachment=a.get("attachment"))
+
+    def _find(args=None, **_):
+        a = args or {}
+        return files.run(files.find_in_files, a.get("path"), a.get("query"),
+                         regex=bool(a.get("regex")), exact=bool(a.get("exact")),
+                         pages=a.get("pages"), ocr=a.get("ocr") or "auto",
+                         attachment=a.get("attachment"), recursive=bool(a.get("recursive")),
+                         max_hits=a.get("max_hits") or files.FIND_MAX_HITS)
+
+    ctx.register_tool(
+        "file_find", "files", FIND_SCHEMA, _find,
+        description=(
+            "Search inside a document, e-mail or folder of files. "
+            "Returns each match with where it is -- page, slide, sheet and row, line, "
+            "or attachment -- and a snippet. Ignores case and accents. Use it instead "
+            "of reading a long PDF end to end; a folder answer lists which files match."
+        ),
+        emoji="\N{RIGHT-POINTING MAGNIFYING GLASS}",
+    )
 
     ctx.register_tool(
         "file_read", "files", READ_SCHEMA, _read,

@@ -345,433 +345,46 @@ def _token(need_scope=None):
 
 _MAX_FILE_BYTES = 30 * 1024 * 1024
 _TEXT_LIMIT = 60_000
-_PAGE_TEXT_MIN = 20
 _OCR_MAX_PAGES = 15
-# OCR configuration is read from the environment, with the same names and the
-# same order as file-reader: OCR_URL / OCR_MODEL / OCR_API_KEY for your own
-# server, OCR_CLOUD_* only with ocr="cloud". See _ocr_settings below.
-_OCR_MODEL = "deepseek-ai/DeepSeek-OCR-2"
-_OCR_DPI = 200
-_DEEPSEEK_OCR_PROMPT = "<|grounding|>Convert the document to markdown."
-_VISION_DPI = 300
-_VISION_PROMPT = (
-    "This is one scanned document page. Transcribe every visible character, "
-    "printed and filled in, including numbers and dates. Do not summarise."
-)
 
 
 def _env(name, default=""):
     return (os.environ.get(name) or default).strip()
 
 
-def _note_source(sources, name):
-    if name not in sources:
-        sources.append(name)
-
-
-def _usable(text):
-    return len((text or "").strip()) >= _PAGE_TEXT_MIN
-
-
-# PDF engines are permissively licensed on purpose: pypdfium2 (Apache-2.0 /
-# BSD-3) for text and rendering, pdfplumber (MIT) for tables when installed.
-# PyMuPDF would do both, but it is AGPL-3.0, which this MIT repository does
-# not ship against.
-
-def _pdf_open(data):
-    import pypdfium2
-    return pypdfium2.PdfDocument(data)
-
-
-def _plumber_open(data):
-    """pdfplumber for table extraction, or None when it is not installed."""
-    import io
-    try:
-        import pdfplumber
-        return pdfplumber.open(io.BytesIO(data))
-    except Exception:
-        return None
-
-
-def _page_text(doc, index, plumber=None):
-    """Text plus any table the page already has. Stays on this machine."""
-    page = doc[index]
-    try:
-        textpage = page.get_textpage()
-        try:
-            text = (textpage.get_text_bounded() or "").replace("\r\n", "\n").strip()
-        finally:
-            textpage.close()
-    finally:
-        page.close()
-    tables = []
-    if plumber is not None and index < len(plumber.pages):
-        try:
-            for table in plumber.pages[index].extract_tables() or []:
-                rows = ["\t".join((cell or "").strip() for cell in row) for row in table or []]
-                block = "\n".join(row for row in rows if row.strip())
-                if block:
-                    tables.append(block)
-        except Exception:
-            pass
-    if tables:
-        text = (text + "\n\n" + "\n\n".join(tables)).strip()
-    return text
-
-
-def _page_png(doc, index, dpi):
-    import io
-    page = doc[index]
-    try:
-        image = page.render(scale=dpi / 72).to_pil()
-    finally:
-        page.close()
-    buffer = io.BytesIO()
-    image.save(buffer, format="PNG")
-    return buffer.getvalue()
-
-
-def _pdfminer_text(data):
-    """Character-level fallback used only after Document Intelligence fails."""
-    import io
-
-    try:
-        from pdfminer.high_level import extract_pages
-        from pdfminer.layout import LAParams, LTFigure, LTTextContainer
-    except ImportError:
-        return ""
-
-    def layout_text(container):
-        parts = []
-        for element in container:
-            if isinstance(element, LTTextContainer):
-                parts.append(element.get_text())
-            elif isinstance(element, LTFigure):
-                parts.append(layout_text(element))
-        return "".join(parts)
-
-    laparams = LAParams(
-        line_margin=0.5,
-        word_margin=0.1,
-        char_margin=2.0,
-        boxes_flow=0.5,
-        all_texts=True,
-    )
-    pages = []
-    try:
-        for page in extract_pages(io.BytesIO(data), laparams=laparams):
-            pages.append(layout_text(page).replace("\r\n", "\n").replace("\r", "\n").strip())
-    except Exception:
-        return ""
-    return "\n\n".join(pages).strip()
-
-
-def _ocr_settings():
-    """Your own OpenAI-compatible OCR server; always tried first.
-    OCR_URL empty (the default) skips it."""
-    return _env("OCR_URL").rstrip("/"), _env("OCR_MODEL", _OCR_MODEL), _env("OCR_API_KEY")
-
-
-def _auth_headers(url, key):
-    """Azure OpenAI takes the key in `api-key`; everyone else as a bearer token."""
-    from urllib.parse import urlsplit
-    if not key:
-        return {}
-    if (urlsplit(url).hostname or "").endswith(".azure.com"):
-        return {"api-key": key}
-    return {"Authorization": f"Bearer {key}"}
-
-
-def _chat_text(payload):
-    choice = ((payload or {}).get("choices") or [{}])[0]
-    content = ((choice.get("message") or {}).get("content")) or ""
-    if isinstance(content, list):
-        content = "".join(
-            (part.get("text") or "") for part in content if isinstance(part, dict)
-        )
-    return str(content).strip()
-
-
-def _ocr_server_page(png, url, model, key):
-    import base64
-    import requests
-
-    deepseek = "deepseek-ocr" in model.lower()
-
-    response = requests.post(
-        f"{url}/chat/completions",
-        timeout=180,
-        headers=_auth_headers(url, key),
-        json={
-            "model": model,
-            "temperature": 0,
-            **({"skip_special_tokens": False} if deepseek else {}),
-            "messages": [{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": _DEEPSEEK_OCR_PROMPT if deepseek else _VISION_PROMPT},
-                    {"type": "image_url", "image_url": {
-                        "url": "data:image/png;base64," + base64.b64encode(png).decode(),
-                    }},
-                ],
-            }],
-        },
-    )
-    response.raise_for_status()
-    return _clean_ocr(_chat_text(response.json()))
-
-
-def _clean_ocr(text):
-    """DeepSeek-OCR's grounding mode tags each block with a label and a box,
-    and returns tables as HTML. Keep the words; one table row per line."""
-    import html as _html
-    text = re.sub(r"<\|det\|>.*?<\|/det\|>", "", text, flags=re.S)
-    text = re.sub(r"<\|ref\|>.*?<\|/ref\|>", "", text, flags=re.S)
-    text = re.sub(r"<\|[^|>]{1,40}\|>", "", text)
-
-    def table(match):
-        rows = []
-        for row in re.findall(r"<tr\b.*?</tr>", match.group(0), flags=re.S | re.I):
-            cells = re.findall(r"<t[dh]\b[^>]*>(.*?)</t[dh]>", row, flags=re.S | re.I)
-            rows.append("\t".join(_html.unescape(re.sub(r"<[^>]+>", "", c)).strip() for c in cells))
-        return "\n" + "\n".join(r for r in rows if r.strip()) + "\n"
-
-    text = re.sub(r"<table\b.*?</table>", table, text, flags=re.S | re.I)
-    return re.sub(r"\n{3,}", "\n\n", text).strip()
-
-
-def _azure_di(data):
-    """Raw PDF to prebuilt-layout. Returns (text, status) with status skip|fail|ok."""
-    endpoint = _env("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT").rstrip("/")
-    key = _env("AZURE_DOCUMENT_INTELLIGENCE_KEY")
-    if not endpoint or not key:
-        return "", "skip"
-    try:
-        from azure.ai.documentintelligence import DocumentIntelligenceClient
-        from azure.ai.documentintelligence.models import AnalyzeDocumentRequest
-        from azure.core.credentials import AzureKeyCredential
-    except ImportError:
-        return "", "fail"
-    try:
-        client = DocumentIntelligenceClient(endpoint, AzureKeyCredential(key))
-        poller = client.begin_analyze_document(
-            "prebuilt-layout",
-            AnalyzeDocumentRequest(bytes_source=data),
-        )
-        result = poller.result()
-    except Exception:
-        return "", "fail"
-    pages = []
-    for page in getattr(result, "pages", None) or []:
-        lines = []
-        for line in getattr(page, "lines", None) or []:
-            content = (getattr(line, "content", None) or "").strip()
-            if content:
-                lines.append(content)
-        pages.append("\n".join(lines).strip())
-    text = "\n\n".join(page for page in pages if page).strip()
-    if not text:
-        text = (getattr(result, "content", None) or "").strip()
-    return text, ("ok" if text else "fail")
-
-
-def _vision_settings():
-    """A cloud vision model behind the OpenAI Responses API (Azure OpenAI
-    included); only with ocr="cloud". The key is OCR_CLOUD_API_KEY, or the
-    variable that OCR_CLOUD_API_KEY_ENV names."""
-    key = _env("OCR_CLOUD_API_KEY")
-    if not key and _env("OCR_CLOUD_API_KEY_ENV"):
-        key = _env(_env("OCR_CLOUD_API_KEY_ENV"))
-    return _env("OCR_CLOUD_URL").rstrip("/"), _env("OCR_CLOUD_MODEL"), key
-
-
-def _response_text(payload):
-    chunks = []
-    for item in (payload or {}).get("output") or []:
-        for part in item.get("content") or []:
-            if part.get("type") in ("output_text", "text"):
-                chunks.append(part.get("text") or "")
-    if chunks:
-        return "".join(chunks).strip()
-    return _chat_text(payload)
-
-
-def _cloud_vision_page(png, url, model, key):
-    import base64
-    import requests
-
-    response = requests.post(
-        f"{url}/responses",
-        timeout=180,
-        headers=_auth_headers(url, key),
-        json={
-            "model": model,
-            "input": [{
-                "role": "user",
-                "content": [
-                    {"type": "input_text", "text": _VISION_PROMPT},
-                    {"type": "input_image", "image_url":
-                        "data:image/png;base64," + base64.b64encode(png).decode()},
-                ],
-            }],
-        },
-    )
-    response.raise_for_status()
-    return _response_text(response.json())
-
-
-def _ranges(indexes):
-    """[0, 1, 2, 5] -> '1-3,6' (1-based), the same form file-reader uses."""
-    out = []
-    for i in sorted(indexes):
-        if out and i == out[-1][1] + 1:
-            out[-1][1] = i
-        else:
-            out.append([i, i])
-    return ",".join(f"{a + 1}" if a == b else f"{a + 1}-{b + 1}" for a, b in out)
-
-
-def _place(pages, indexes, text):
-    """Put one recovered block on the first still-empty page."""
-    if not indexes:
-        return
-    pages[indexes[0]] = text
-    for index in indexes[1:]:
-        pages[index] = ""
-
-
 def _read_pdf(data, limit=_TEXT_LIMIT, ocr="auto"):
-    """Read a PDF the same way file-reader does.
+    """The first pages of a PDF, read by shared/pdfread.py -- the same module
+    and the same order as file-reader: text layer, then your OCR server, and
+    the cloud models only with ocr="cloud", after the user agreed.
 
-    1. the text layer, locally;
-    2. your own OCR server (OCR_URL) for pages without one, always;
-    3. pdfminer.six, locally, when pypdfium2 could not open the file;
-    4. only with ocr="cloud", which the agent passes after the user agreed:
-       Azure Document Intelligence (if configured), then the cloud vision
-       model (OCR_CLOUD_*), for pages still empty.
-
-    Returns (text, text_source, note, cloud_offer). text_source names every
-    layer that contributed, joined with '+'. cloud_offer is set when pages are
-    still empty and a cloud model could read them.
+    Returns (text, text_source, note, cloud_offer).
     """
-    import requests
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:  # imported from elsewhere, e.g. execute_code
+        sys.path.insert(0, here)
+    import pdfread
 
     notes = []
-    sources = []
-    pages = []
-    doc = None
     try:
-        doc = _pdf_open(data)
-    except Exception as exc:
-        notes.append(f"pypdfium2 could not open the PDF ({type(exc).__name__}).")
-
-    if doc is not None:
-        plumber = _plumber_open(data)
-        try:
-            total = len(doc)
-            count = min(total, _OCR_MAX_PAGES)
-            if total > count:
-                notes.append(f"Read the first {count} of {total} pages.")
-            empty = []
-            for index in range(count):
-                body = _page_text(doc, index, plumber)
-                if _usable(body):
-                    pages.append(body)
-                    _note_source(sources, "text-layer")
-                else:
-                    pages.append(None)
-                    empty.append(index)
-            url, model, key = _ocr_settings()
-            if empty and url and model:
-                failed = 0
-                for index in empty:
-                    try:
-                        text = _ocr_server_page(_page_png(doc, index, _OCR_DPI), url, model, key)
-                    except requests.HTTPError:
-                        failed += 1
-                        continue
-                    except (requests.ConnectionError, requests.Timeout) as exc:
-                        # Unreachable: do not wait out the timeout once per page.
-                        notes.append(f"The OCR server is unreachable "
-                                     f"({type(exc).__name__}); its remaining pages were skipped.")
-                        break
-                    except Exception:
-                        failed += 1
-                        continue
-                    if _usable(text):
-                        pages[index] = text.strip()
-                        _note_source(sources, "ocr-server")
-                if failed:
-                    notes.append(f"{failed} page(s) got no answer from {model}.")
-            elif empty and not url:
-                notes.append("No OCR server is configured (OCR_URL is empty).")
-        finally:
-            doc.close()
-            if plumber is not None:
-                plumber.close()
-    else:
-        pages = [None]
-        miner = _pdfminer_text(data)
-        if miner:
-            _place(pages, [0], miner)
-            _note_source(sources, "pdfminer")
-
-    empty = [i for i, text in enumerate(pages) if text is None]
-    cloud_offer = None
-    vision_url, vision_model, vision_key = _vision_settings()
-    vision_ready = bool(vision_url and vision_model and vision_key)
-    di_ready = bool(_env("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT") and _env("AZURE_DOCUMENT_INTELLIGENCE_KEY"))
-
-    if empty and ocr == "cloud":
-        if di_ready:
-            di_text, di_status = _azure_di(data)
-            if di_status == "ok":
-                _place(pages, empty, di_text)
-                _note_source(sources, "azure-document-intelligence")
-            else:
-                notes.append("Azure Document Intelligence did not return text.")
-            empty = [i for i, text in enumerate(pages) if text is None]
-        if empty and vision_ready:
-            try:
-                doc = _pdf_open(data)
-            except Exception:
-                doc = None
-            if doc is None:
-                notes.append("The cloud vision model needs a rendered page, and pypdfium2 could not open the PDF.")
-            else:
-                try:
-                    failed = 0
-                    for index in empty:
-                        if index >= len(doc):
-                            continue
-                        try:
-                            text = _cloud_vision_page(
-                                _page_png(doc, index, _VISION_DPI), vision_url, vision_model, vision_key)
-                        except Exception:
-                            failed += 1
-                            text = ""
-                        if text.strip():
-                            pages[index] = text.strip()
-                            _note_source(sources, "cloud-vision")
-                    if failed:
-                        notes.append(f"{failed} page(s) got no answer from {vision_model}.")
-                finally:
-                    doc.close()
-        elif empty and not di_ready:
-            notes.append("ocr='cloud' was asked for but no cloud model is configured "
-                         "(OCR_CLOUD_URL, OCR_CLOUD_MODEL and OCR_CLOUD_API_KEY or OCR_CLOUD_API_KEY_ENV).")
-    elif empty and ocr != "never" and (vision_ready or di_ready):
-        cloud_offer = {
-            "pages": _ranges(empty),
-            "how": "Ask the user. Only if they agree, call m365_get again with the same path "
-                   "and ocr='cloud': these pages then go to the cloud model, outside the organisation.",
-        }
-
-    parts = [text for text in pages if text]
+        count = pdfread.page_count(data)
+        if count > _OCR_MAX_PAGES:
+            notes.append(f"Read the first {_OCR_MAX_PAGES} of {count} pages.")
+        r = pdfread.read_pages(data, pages=list(range(min(count, _OCR_MAX_PAGES))),
+                               ocr=ocr, ocr_limit=_OCR_MAX_PAGES)
+    except pdfread.PdfError as exc:
+        return "", "", f"{exc}. {exc.hint}".strip(), None
+    sources, parts = [], []
+    for index in r["selected"]:
+        label = r["sources"][index]
+        if label:
+            parts.append(f"--- page {index + 1} ---\n{r['texts'][index]}")
+            if label not in sources:
+                sources.append(label)
+    notes += r["notes"]
     text = "\n\n".join(parts).strip()[:limit]
-    if not text and not notes and not cloud_offer:
+    if not text and not notes and not r["cloud_offer"]:
         notes.append("The file is saved locally and no layer returned text.")
-    return text, "+".join(sources), " ".join(n for n in notes if n), cloud_offer
+    return text, "+".join(sources), " ".join(notes), r["cloud_offer"]
 
 
 def _compact_children(path, payload):

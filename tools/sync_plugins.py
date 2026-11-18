@@ -18,7 +18,7 @@ second original:
     py tools/sync_plugins.py            refresh the copies
     py tools/sync_plugins.py --check    fail if they differ (CI)
 
-Edit the skill. Run the sync. Commit both.
+Edit the skill (or the module under shared/). Run the sync. Commit all of it.
 """
 from __future__ import annotations
 
@@ -42,6 +42,36 @@ PAIRS = {
 
 # What travels. Anything else in a skill directory stays there.
 COPIED = ("SKILL.md", "scripts")
+
+# Modules more than one skill needs. A skill has to stay self-contained -- it
+# is installed as one directory -- so each gets a copy in its scripts/, made
+# here from the one source under shared/. Step one of every run, so the
+# plugin copies below then pick the fresh file up like any other script.
+SHARED = {
+    "shared/pdfread.py": ("file-reader", "m365-graph"),
+}
+
+
+def sync_shared(check: bool) -> int:
+    problems = 0
+    for source_rel, skills in SHARED.items():
+        source = ROOT / source_rel
+        for skill in skills:
+            destination = ROOT / ".agents" / "skills" / skill / "scripts" / source.name
+            if destination.is_file() and filecmp.cmp(source, destination, shallow=False):
+                continue
+            if check:
+                print(f"     {skill}/scripts/{source.name} differs from {source_rel}")
+                problems += 1
+                continue
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+            print(f"     copied {source_rel} -> {skill}/scripts/{source.name}")
+    if problems:
+        print("FAIL shared modules")
+    else:
+        print(f"ok   shared modules ({sum(len(v) for v in SHARED.values())} copies)")
+    return problems
 
 
 def sources(skill: str) -> list[tuple[Path, Path]]:
@@ -114,7 +144,8 @@ def main() -> int:
                         help="report drift and exit non-zero instead of copying")
     arguments = parser.parse_args()
 
-    total = sum(sync(plugin, skill, arguments.check) for plugin, skill in PAIRS.items())
+    total = sync_shared(arguments.check)
+    total += sum(sync(plugin, skill, arguments.check) for plugin, skill in PAIRS.items())
 
     print()
     if total:

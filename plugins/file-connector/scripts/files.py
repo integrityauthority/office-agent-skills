@@ -25,17 +25,12 @@ standard library. Each one is optional; a missing one is named in the answer.
 from __future__ import annotations
 
 import argparse
-import base64
-import datetime as _dt
 import html as _html
 import io
 import json
 import os
 import re
 import sys
-import urllib.error
-import urllib.parse
-import urllib.request
 import zipfile
 from email import policy
 from email.parser import BytesParser
@@ -45,21 +40,10 @@ from xml.etree import ElementTree as ET
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import msgfile  # noqa: E402
+import pdfread  # noqa: E402
 
 TEXT_LIMIT = 40_000
 MAX_FILE_BYTES = 100 * 1024 * 1024
-PAGE_TEXT_MIN = 20
-OCR_PAGES_PER_CALL = 10
-OCR_DPI = 200
-VISION_DPI = 250
-OCR_MODEL_DEFAULT = "deepseek-ai/DeepSeek-OCR-2"
-# DeepSeek-OCR is steered by its own control prompt; any other vision model
-# gets the plain transcription instruction.
-DEEPSEEK_OCR_PROMPT = "<|grounding|>Convert the document to markdown."
-VISION_PROMPT = (
-    "This is one scanned document page. Transcribe every visible character, "
-    "printed and filled in, including numbers and dates. Do not summarise."
-)
 XLSX_MAX_SHEETS = 20
 XLSX_MAX_ROWS = 300
 XLSX_MAX_COLS = 30
@@ -116,33 +100,8 @@ def _resolve(path) -> Path:
     return p
 
 
-def _parse_pages(spec, count):
-    """'1-3,7' (1-based) -> sorted 0-based indexes within the document."""
-    if spec in (None, "", "all"):
-        return list(range(count))
-    chosen = set()
-    for part in str(spec).replace(" ", "").split(","):
-        if not part:
-            continue
-        if "-" in part:
-            a, b = part.split("-", 1)
-            start = int(a) if a else 1
-            end = int(b) if b else count
-            chosen.update(range(start - 1, min(end, count)))
-        else:
-            chosen.add(int(part) - 1)
-    return sorted(i for i in chosen if 0 <= i < count)
-
-
-def _ranges(indexes):
-    """[0,1,2,5] -> '1-3,6' (1-based)."""
-    out = []
-    for i in sorted(indexes):
-        if out and i == out[-1][1] + 1:
-            out[-1][1] = i
-        else:
-            out.append([i, i])
-    return ",".join(f"{a + 1}" if a == b else f"{a + 1}-{b + 1}" for a, b in out)
+_parse_pages = pdfread.parse_pages
+_ranges = pdfread.ranges
 
 
 def _decode_text(data: bytes) -> str:
@@ -245,326 +204,52 @@ def detect_kind(data: bytes, name: str = "") -> str:
 
 
 # -------------------------------------------------------------------- PDF ---
-
-def _pdfium():
-    try:
-        import pypdfium2
-        return pypdfium2
-    except ImportError:
-        return None
-
-
-def _plumber_open(data):
-    """pdfplumber (MIT) for tables, or None when it is not installed."""
-    try:
-        import pdfplumber
-        return pdfplumber.open(io.BytesIO(data))
-    except Exception:
-        return None
-
-
-def _plumber_tables(plumber, index):
-    """A page's tables as tab-separated rows; empty when there are none."""
-    if plumber is None or index >= len(plumber.pages):
-        return ""
-    blocks = []
-    try:
-        for table in plumber.pages[index].extract_tables() or []:
-            rows = ["\t".join((cell or "").replace("\n", " ").strip() for cell in row)
-                    for row in table or []]
-            block = "\n".join(row for row in rows if row.strip())
-            if block:
-                blocks.append(block)
-    except Exception:
-        return ""
-    return "\n\n".join(blocks)
-
-
-def _page_png(pdfium_doc, index, dpi):
-    page = pdfium_doc[index]
-    try:
-        image = page.render(scale=dpi / 72).to_pil()
-    finally:
-        page.close()
-    buffer = io.BytesIO()
-    image.save(buffer, format="PNG")
-    return buffer.getvalue()
-
-
-def _post_json(url, payload, headers, timeout=180):
-    request = urllib.request.Request(
-        url, data=json.dumps(payload).encode("utf-8"), method="POST",
-        headers={"Content-Type": "application/json", **headers})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
-
-
-def _chat_text(payload):
-    choice = ((payload or {}).get("choices") or [{}])[0]
-    content = (choice.get("message") or {}).get("content") or ""
-    if isinstance(content, list):
-        content = "".join(part.get("text") or "" for part in content if isinstance(part, dict))
-    return str(content).strip()
-
-
-def _clean_ocr(text):
-    """DeepSeek-OCR's grounding mode tags each block with a box; keep the words."""
-    text = re.sub(r"<\|det\|>.*?<\|/det\|>", "", text, flags=re.S)
-    text = re.sub(r"<\|ref\|>.*?<\|/ref\|>", "", text, flags=re.S)  # block labels: text, table, title
-    text = re.sub(r"<\|[^|>]{1,40}\|>", "", text)
-    # Tables come back as HTML; one row per line, cells separated by tabs.
-    text = re.sub(r"<table\b.*?</table>", lambda m: "\n" + html_to_text(m.group(0)) + "\n",
-                  text, flags=re.S | re.I)
-    return re.sub(r"\n{3,}", "\n\n", text).strip()
-
-
-def _env(name, default=""):
-    return (os.environ.get(name) or default).strip()
-
-
-def ocr_settings():
-    """The two OCR tiers, from the environment. Identical in m365-graph.
-
-    OCR_URL, OCR_MODEL, OCR_API_KEY
-        Your own OpenAI-compatible server (chat completions with an image).
-        Always tried first.
-    OCR_CLOUD_URL, OCR_CLOUD_MODEL, and OCR_CLOUD_API_KEY or
-    OCR_CLOUD_API_KEY_ENV (the name of the variable that holds the key)
-        A cloud vision model behind the OpenAI Responses API, Azure OpenAI
-        included. Used only with ocr="cloud".
-    """
-    local_url = _env("OCR_URL").rstrip("/")
-    local = (local_url, _env("OCR_MODEL", OCR_MODEL_DEFAULT), _env("OCR_API_KEY")) if local_url else None
-    cloud_url = _env("OCR_CLOUD_URL").rstrip("/")
-    cloud_model = _env("OCR_CLOUD_MODEL")
-    cloud_key = _env("OCR_CLOUD_API_KEY") or (_env(_env("OCR_CLOUD_API_KEY_ENV")) if _env("OCR_CLOUD_API_KEY_ENV") else "")
-    cloud = (cloud_url, cloud_model, cloud_key) if cloud_url and cloud_model and cloud_key else None
-    return {"local": local, "cloud": cloud}
-
-
-def _auth_headers(url, key):
-    """Azure OpenAI takes the key in `api-key`; everyone else as a bearer token."""
-    if not key:
-        return {}
-    host = urllib.parse.urlsplit(url).hostname or ""
-    if host.endswith(".azure.com"):
-        return {"api-key": key}
-    return {"Authorization": f"Bearer {key}"}
-
-
-def _ocr_local(png, url, model, key):
-    deepseek = "deepseek-ocr" in model.lower()
-    payload = _post_json(f"{url}/chat/completions", {
-        "model": model,
-        "temperature": 0,
-        **({"skip_special_tokens": False} if deepseek else {}),
-        "messages": [{"role": "user", "content": [
-            {"type": "text", "text": DEEPSEEK_OCR_PROMPT if deepseek else VISION_PROMPT},
-            {"type": "image_url", "image_url": {
-                "url": "data:image/png;base64," + base64.b64encode(png).decode()}},
-        ]}],
-    }, _auth_headers(url, key))
-    return _clean_ocr(_chat_text(payload))
-
-
-def _ocr_cloud(png, url, model, key):
-    payload = _post_json(f"{url}/responses", {
-        "model": model,
-        "input": [{"role": "user", "content": [
-            {"type": "input_text", "text": VISION_PROMPT},
-            {"type": "input_image",
-             "image_url": "data:image/png;base64," + base64.b64encode(png).decode()},
-        ]}],
-    }, _auth_headers(url, key))
-    chunks = [part.get("text") or ""
-              for item in payload.get("output") or []
-              for part in item.get("content") or []
-              if part.get("type") in ("output_text", "text")]
-    return ("".join(chunks) or _chat_text(payload)).strip()
-
-
-def _pdfminer_pages(data, indexes):
-    try:
-        from pdfminer.high_level import extract_text
-    except ImportError:
-        return None
-    out = {}
-    for index in indexes:
-        try:
-            out[index] = extract_text(io.BytesIO(data), page_numbers=[index]).strip()
-        except Exception:
-            out[index] = ""
-    return out
-
-
-def _pdfminer_count(data):
-    try:
-        from pdfminer.pdfpage import PDFPage
-        return sum(1 for _ in PDFPage.get_pages(io.BytesIO(data)))
-    except Exception:
-        return None
-
+# The reading itself (text layer, OCR server, cloud) is shared/pdfread.py,
+# the same module m365-graph uses. Here it is only formatted for the answer.
 
 def read_pdf(data, pages=None, ocr="auto", max_chars=TEXT_LIMIT):
-    if ocr not in ("auto", "never", "force", "cloud"):
-        raise FileError(f"ocr must be auto, never, force or cloud, not {ocr!r}")
-    notes = []
-    pdfium = _pdfium()
-    doc = None
-    if pdfium is not None:
-        try:
-            doc = pdfium.PdfDocument(data)
-        except Exception as exc:
-            message = str(exc)
-            if "password" in message.lower():
-                raise FileError("the PDF is password-protected",
-                                "Ask the user for an unprotected copy.") from exc
-            notes.append(f"pypdfium2 could not open the PDF ({type(exc).__name__}).")
-    count = len(doc) if doc is not None else _pdfminer_count(data)
-    if count is None:
-        raise FileError("the PDF could not be opened by any reader",
-                        "Install pypdfium2 or pdfminer.six, or the file is damaged.")
-    selected = _parse_pages(pages, count)
-    if not selected:
-        raise FileError(f"no pages match {pages!r}; the document has {count}")
-
-    texts = {}
-    if doc is not None:
-        plumber = _plumber_open(data)
-        try:
-            for index in selected:
-                page = doc[index]
-                try:
-                    textpage = page.get_textpage()
-                    try:
-                        texts[index] = textpage.get_text_bounded().replace("\r\n", "\n").strip()
-                    finally:
-                        textpage.close()
-                finally:
-                    page.close()
-                tables = _plumber_tables(plumber, index) if len(texts[index]) >= PAGE_TEXT_MIN else ""
-                if tables:
-                    texts[index] += "\n\n[tables]\n" + tables
-        finally:
-            if plumber is not None:
-                plumber.close()
-    else:
-        mined = _pdfminer_pages(data, selected)
-        if mined is None:
-            raise FileError("no PDF text reader is installed",
-                            "pip install pypdfium2 (or pdfminer.six)")
-        texts = mined
-        notes.append("Read with pdfminer.six; pypdfium2 is not installed, so scanned pages cannot be rendered for OCR.")
-
-    source = {i: ("text-layer" if len(texts.get(i, "")) >= PAGE_TEXT_MIN else "") for i in selected}
-    if ocr == "force":
-        need = list(selected)
-    elif ocr == "never":
-        need = []
-    else:
-        need = [i for i in selected if not source[i]]
-
-    # The order is the same as in m365-graph: your own OCR server first,
-    # always; the cloud model only for pages still empty, and only when the
-    # caller passes ocr="cloud" after the user agreed.
-    settings = ocr_settings()
-    ocr_skipped = []
-    unrendered = []
-    if need and doc is None:
-        unrendered = need  # no pypdfium2: nothing can be sent to any OCR
-    elif need:
-        engines = []
-        if settings["local"]:
-            engines.append(("ocr-server", settings["local"], _ocr_local, OCR_DPI))
-        else:
-            notes.append("No OCR server is configured (OCR_URL is empty).")
-        if ocr == "cloud":
-            if settings["cloud"]:
-                engines.append(("cloud-vision", settings["cloud"], _ocr_cloud, VISION_DPI))
-            else:
-                notes.append("ocr='cloud' was asked for but OCR_CLOUD_URL, OCR_CLOUD_MODEL "
-                             "or the cloud key (OCR_CLOUD_API_KEY / OCR_CLOUD_API_KEY_ENV) is not set.")
-        if engines:
-            todo, ocr_skipped = need[:OCR_PAGES_PER_CALL], need[OCR_PAGES_PER_CALL:]
-            done = set()
-            for label, config, call, dpi in engines:
-                failed = []
-                for index in [i for i in todo if i not in done]:
-                    try:
-                        text = call(_page_png(doc, index, dpi), *config)
-                    except urllib.error.HTTPError as exc:
-                        failed.append(f"{index + 1} (HTTP {exc.code})")
-                        continue
-                    except (urllib.error.URLError, OSError, ValueError) as exc:
-                        # Unreachable server: stop here instead of waiting out
-                        # the timeout once per page.
-                        notes.append(f"{label} is unreachable ({type(exc).__name__}: "
-                                     f"{str(exc)[:80]}); its remaining pages were skipped.")
-                        break
-                    if len(text.strip()) >= PAGE_TEXT_MIN or (ocr == "force" and text.strip()):
-                        texts[index] = text.strip()
-                        source[index] = label
-                        done.add(index)
-                if failed:
-                    notes.append(f"{label} gave no answer for page(s) {', '.join(failed)}.")
-        else:
-            pass  # no OCR engine: the pages stay empty, the cloud offer below applies
-    if doc is not None:
-        doc.close()
-
-    empty = [i for i in selected if not source[i] and i not in ocr_skipped and i not in unrendered]
-    cloud_offer = None
-    if empty and ocr != "cloud" and ocr != "never" and settings["cloud"]:
-        cloud_offer = {
-            "pages": _ranges(empty),
-            "how": "Ask the user. Only if they agree, call again with ocr='cloud': these pages "
-                   "then go as images to the cloud vision model, outside the organisation.",
-        }
-
+    r = pdfread.read_pages(data, pages=pages, ocr=ocr)
+    selected, texts, sources = r["selected"], r["texts"], r["sources"]
     parts = []
     for index in selected:
-        body = texts.get(index, "") if source[index] else ""
+        body = texts.get(index, "") if sources[index] else ""
         parts.append(f"--- page {index + 1} ---\n{body or '[no text on this page]'}")
     full = "\n\n".join(parts)
     text, truncated = _clip(full, max_chars)
-
     by_source = {}
     for index in selected:
-        by_source.setdefault(source[index] or "no-text", []).append(index)
+        by_source.setdefault(sources[index] or "no-text", []).append(index)
     result = {
         "kind": "pdf",
-        "page_count": count,
-        "pages_read": _ranges(selected),
-        "page_sources": {k: _ranges(v) for k, v in by_source.items()},
+        "page_count": r["count"],
+        "pages_read": pdfread.ranges(selected),
+        "page_sources": {k: pdfread.ranges(v) for k, v in by_source.items()},
         "text": text,
         "truncated": truncated,
     }
-    if cloud_offer:
-        result["cloud_ocr_needs_approval"] = cloud_offer
+    if r["cloud_offer"]:
+        result["cloud_ocr_needs_approval"] = r["cloud_offer"]
     if truncated:
         shown = full[:max_chars].count("--- page ")
         rest = selected[max(shown - 1, 0):]
-        result["next"] = f"Text cut at {max_chars} characters. Continue with pages='{_ranges(rest)}'."
-    if ocr_skipped:
-        notes.append(f"OCR was capped at {OCR_PAGES_PER_CALL} pages per call; "
-                     f"page(s) {_ranges(ocr_skipped)} were not read. Call again with those pages.")
-    if notes:
-        result["notes"] = notes
+        result["next"] = (f"Text cut at {max_chars} characters. Continue with "
+                          f"pages='{pdfread.ranges(rest)}', or search with file_find.")
+    if r["notes"]:
+        result["notes"] = r["notes"]
     return result
 
 
 def render_pdf_pages(data, pages="1", dpi=150, stem="document"):
-    pdfium = _pdfium()
-    if pdfium is None:
+    doc = pdfread.open_pdf(data)
+    if doc is None:
         raise FileError("rendering needs pypdfium2", "pip install pypdfium2")
-    doc = pdfium.PdfDocument(data)
     try:
-        selected = _parse_pages(pages, len(doc))[:20]
+        selected = pdfread.parse_pages(pages, len(doc))[:20]
         folder = _cache_dir("render")
         out = []
         for index in selected:
             target = folder / f"{_safe_name(stem)}-p{index + 1}.png"
-            target.write_bytes(_page_png(doc, index, dpi))
+            target.write_bytes(pdfread.render_png(doc, index, dpi))
             out.append({"page": index + 1, "png": str(target)})
         return {"page_count": len(doc), "images": out}
     finally:
@@ -896,6 +581,263 @@ def read_file(path, pages=None, ocr="auto", attachment=None, max_chars=TEXT_LIMI
     return result
 
 
+# ------------------------------------------------------------------- search ---
+
+SEARCHABLE_EXTENSIONS = {".pdf", ".msg", ".eml", ".docx", ".xlsx", ".pptx"} | HTML_EXTENSIONS | TEXT_EXTENSIONS
+FIND_MAX_FILES = 300
+FIND_MAX_HITS = 50
+FIND_CONTEXT = 80
+FIND_ATTACHMENT_DEPTH = 2
+FIND_FOLDER_MAX_BYTES = 20 * 1024 * 1024   # bigger files are searched one at a time
+FIND_TIME_BUDGET = 45                      # seconds a folder search may take
+FIND_XLSX_MAX_ROWS = 200_000
+
+
+def _fold(text):
+    """Lower-case and strip accents, keeping a map back to the original
+    positions: 'Összeférhetetlenség' and 'osszeferhetetlenseg' match."""
+    import unicodedata
+    chars, index = [], []
+    for i, ch in enumerate(text):
+        for c in unicodedata.normalize("NFKD", ch):
+            if unicodedata.combining(c):
+                continue
+            for lc in c.lower():
+                chars.append(lc)
+                index.append(i)
+    return "".join(chars), index
+
+
+def _strip_accents(text):
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFKD", text) if not unicodedata.combining(c))
+
+
+def _matcher(query, regex=False, exact=False):
+    """A function text -> [(start, end)] over the ORIGINAL text."""
+    query = (query or "").strip()
+    if not query:
+        raise FileError("the search query is empty")
+    if regex:
+        try:
+            pattern = re.compile(query if exact else _strip_accents(query), 0 if exact else re.I)
+        except re.error as exc:
+            raise FileError(f"invalid regular expression: {exc}",
+                            "Pass regex=false to search for the words as written.") from exc
+    else:
+        # Words in order, any whitespace between them: PDF text breaks lines
+        # in the middle of a phrase.
+        words = (query if exact else _fold(query)[0]).split()
+        pattern = re.compile(r"\s+".join(re.escape(w) for w in words))
+
+    def find(text):
+        if exact:
+            return [(m.start(), m.end()) for m in pattern.finditer(text) if m.end() > m.start()]
+        folded, index = _fold(text)
+        out = []
+        for m in pattern.finditer(folded):
+            if m.end() > m.start():
+                out.append((index[m.start()], index[m.end() - 1] + 1))
+        return out
+    return find
+
+
+def _snippet(text, start, end, context=FIND_CONTEXT):
+    a, b = max(0, start - context), min(len(text), end + context)
+    before = re.sub(r"\s+", " ", text[a:start]).lstrip()
+    match = re.sub(r"\s+", " ", text[start:end])
+    after = re.sub(r"\s+", " ", text[end:b]).rstrip()
+    return ("…" if a > 0 else "") + before + "«" + match + "»" + after + ("…" if b < len(text) else "")
+
+
+def _search_units(data, name, kind, pages, ocr, meta, prefix="", depth=0):
+    """Yield (where, text, line_numbers) pieces of one file to search."""
+    if kind == "pdf":
+        r = pdfread.read_pages(data, pages=pages, ocr=ocr, tables=False)
+        meta["notes"] += [prefix + n for n in r["notes"]]
+        empty = [i for i in r["selected"] if not r["sources"][i]]
+        if empty:
+            meta["unsearched"].append(f"{prefix}page(s) {pdfread.ranges(empty)}")
+        if r["cloud_offer"] and not prefix:
+            meta["cloud_offer"] = r["cloud_offer"]
+        for i in r["selected"]:
+            if r["sources"][i]:
+                yield f"{prefix}page {i + 1}", r["texts"][i], False
+        return
+    if kind in ("msg", "msg-object", "eml"):
+        if kind == "msg":
+            summary = msgfile.open_msg(data).summary()
+        elif kind == "msg-object":
+            summary = data.summary()
+        else:
+            summary = _eml_summary(_eml_message(data))
+        body = summary["body"] if summary["body_source"] != "html" else html_to_text(summary["body"])
+        yield f"{prefix}subject", summary["subject"], False
+        yield f"{prefix}body", body, True
+        if depth >= FIND_ATTACHMENT_DEPTH:
+            return
+        for att in summary["attachments"]:
+            if att.get("inline") or att.get("ole_object"):
+                continue
+            label = f"{prefix}attachment {att['index']} ({att['name']}) › "
+            try:
+                if kind == "msg-object":
+                    sub_name, payload = data.attachment(att["index"])
+                    sub_kind = "msg-object" if isinstance(payload, msgfile.Msg) else detect_kind(payload, sub_name)
+                else:
+                    sub_name, payload, sub_kind = _attachment_of(data, "msg" if kind == "msg" else "eml", att["index"])
+                yield from _search_units(payload, sub_name, sub_kind, None, ocr, meta, label, depth + 1)
+            except (FileError, msgfile.MsgError, pdfread.PdfError) as exc:
+                meta["notes"].append(f"{label}not searched: {exc}")
+        return
+    if kind == "xlsx":
+        try:
+            from openpyxl import load_workbook
+        except ImportError as exc:
+            raise FileError("searching .xlsx needs openpyxl", "pip install openpyxl") from exc
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # openpyxl warns about styles it drops
+            wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+        rows = 0
+        try:
+            for sheet in wb.sheetnames:
+                for number, row in enumerate(wb[sheet].iter_rows(values_only=True), 1):
+                    rows += 1
+                    if rows > FIND_XLSX_MAX_ROWS:
+                        meta["notes"].append(f"{prefix}searched the first {FIND_XLSX_MAX_ROWS} rows only.")
+                        return
+                    cells = ["" if c is None else str(c) for c in row]
+                    if any(cells):
+                        yield f"{prefix}sheet {sheet}, row {number}", "\t".join(cells).rstrip(), False
+        finally:
+            wb.close()
+        return
+    if kind == "pptx":
+        text = read_pptx(data, max_chars=10 ** 9)["text"]
+        for part in re.split(r"(?m)^--- slide (?=\d+ ---$)", text):
+            head, _, body = part.partition(" ---\n")
+            if head.isdigit():
+                yield f"{prefix}slide {head}", body, False
+        return
+    if kind in ("docx", "html", "text"):
+        result = _read_bytes(data, name, kind, None, "never", 10 ** 9)
+        yield f"{prefix}{'document' if kind == 'docx' else 'text'}", result["text"], True
+        return
+    meta["notes"].append(f"{prefix or name}: {kind} files are not searched.")
+
+
+def _search_file(data, name, kind, find, pages, ocr, max_hits, meta):
+    hits, total = [], 0
+    for where, text, with_lines in _search_units(data, name, kind, pages, ocr, meta):
+        for start, end in find(text or ""):
+            total += 1
+            if len(hits) < max_hits:
+                location = where
+                if with_lines:
+                    location += f", line {text.count(chr(10), 0, start) + 1}"
+                hits.append({"where": location, "snippet": _snippet(text, start, end)})
+    return hits, total
+
+
+def find_in_files(path, query, regex=False, exact=False, pages=None, ocr="auto",
+                  attachment=None, recursive=False, max_hits=FIND_MAX_HITS):
+    """Search inside one file, or every readable file in a folder.
+
+    One file: every match with where it is (page, slide, sheet and row, line,
+    or attachment) and a snippet with the match in «». A scanned PDF page is
+    read through your OCR server like file_read does (ocr="never" skips it).
+    A folder: which files match and how often, text layers only (no OCR).
+    """
+    max_hits = max(1, min(int(max_hits or FIND_MAX_HITS), 500))
+    find = _matcher(query, regex=regex, exact=exact)
+    text = os.path.expandvars(os.path.expanduser(str(path or "").strip().strip('"').strip("'")))
+    target = Path(text) if text else None
+    if target is not None and not target.is_absolute():
+        target = Path.cwd() / target
+
+    if target is not None and target.is_dir():
+        import time
+        pattern = "**/*" if recursive else "*"
+        # Newest first: when the time budget runs out, what is left is old.
+        candidates = sorted((p for p in target.glob(pattern)
+                             if p.is_file() and p.suffix.lower() in SEARCHABLE_EXTENSIONS
+                             and not p.name.startswith("~$")),
+                            key=lambda p: p.stat().st_mtime, reverse=True)
+        skipped = max(0, len(candidates) - FIND_MAX_FILES)
+        files_with_hits, scanned_only, failed, too_big, total = [], [], [], [], 0
+        started, searched, out_of_time = time.monotonic(), 0, 0
+        for p in candidates[:FIND_MAX_FILES]:
+            if time.monotonic() - started > FIND_TIME_BUDGET:
+                out_of_time += 1
+                continue
+            if p.stat().st_size > FIND_FOLDER_MAX_BYTES:
+                too_big.append(str(p))
+                continue
+            searched += 1
+            meta = {"notes": [], "unsearched": [], "cloud_offer": None}
+            try:
+                data = p.read_bytes()
+                hits, count = _search_file(data, p.name, detect_kind(data, p.name), find,
+                                           None, "never", 3, meta)
+            except (FileError, msgfile.MsgError, pdfread.PdfError) as exc:
+                failed.append({"path": str(p), "error": str(exc)})
+                continue
+            except Exception as exc:
+                failed.append({"path": str(p), "error": f"{type(exc).__name__}: {exc}"})
+                continue
+            if count:
+                total += count
+                files_with_hits.append({"path": str(p), "hits": count, "first": hits})
+            elif meta["unsearched"] and p.suffix.lower() == ".pdf":
+                scanned_only.append(str(p))
+        files_with_hits.sort(key=lambda f: -f["hits"])
+        result = {"folder": str(target), "query": query, "files_searched": searched,
+                  "files_with_hits": files_with_hits[:max_hits], "hit_count": total}
+        notes = []
+        if out_of_time:
+            notes.append(f"Stopped after {FIND_TIME_BUDGET} s; the {out_of_time} oldest file(s) were not "
+                         "searched. Narrow the folder, or search those files one at a time.")
+        if too_big:
+            result["too_big_for_folder_search"] = too_big[:50]
+            notes.append(f"{len(too_big)} file(s) above {FIND_FOLDER_MAX_BYTES // 2**20} MB were skipped; "
+                         "search each on its own with file_find on that file.")
+        if len(files_with_hits) > max_hits:
+            notes.append(f"{len(files_with_hits) - max_hits} more file(s) matched; raise max_hits to see them.")
+        if skipped:
+            notes.append(f"Only the first {FIND_MAX_FILES} files were searched; {skipped} more were not.")
+        if scanned_only:
+            result["scanned_pdfs_not_searched"] = scanned_only[:50]
+            notes.append("Folder search reads text layers only. Search a scanned PDF one at a time "
+                         "with file_find on that file: its pages then go through the OCR server.")
+        if failed:
+            result["not_searched"] = failed[:50]
+        if notes:
+            result["notes"] = notes
+        return result
+
+    p = _resolve(path)
+    data = p.read_bytes()
+    kind = detect_kind(data, p.name)
+    name = p.name
+    if attachment not in (None, ""):
+        name, data, kind = _pick_attachment(data, kind, attachment)
+    meta = {"notes": [], "unsearched": [], "cloud_offer": None}
+    hits, total = _search_file(data, name, kind, find, pages, ocr, max_hits, meta)
+    result = {"path": str(p), "query": query, "kind": kind, "hit_count": total, "hits": hits}
+    if attachment not in (None, ""):
+        result["attachment"] = {"selector": str(attachment), "name": name}
+    if total > len(hits):
+        result["next"] = f"{total - len(hits)} more match(es); raise max_hits or narrow with pages=."
+    if meta["unsearched"]:
+        result["not_searched"] = meta["unsearched"]
+    if meta["cloud_offer"]:
+        result["cloud_ocr_needs_approval"] = meta["cloud_offer"]
+    if meta["notes"]:
+        result["notes"] = meta["notes"]
+    return result
+
+
 def save_attachments(path, dest=None, which=None, include_inline=False):
     """Write an e-mail's attachments to a folder. Never overwrites a file."""
     p = _resolve(path)
@@ -972,7 +914,6 @@ def status():
         import importlib.util
         return importlib.util.find_spec(module) is not None
 
-    settings = ocr_settings()
     return {
         "readers": {
             "pdf_text_and_render": "pypdfium2" if has("pypdfium2") else None,
@@ -982,11 +923,7 @@ def status():
             "xlsx": "openpyxl" if has("openpyxl") else None,
             "docx_pptx_eml_html_text": "standard library",
         },
-        "ocr_server": {"configured": bool(settings["local"]),
-                      "model": settings["local"][1] if settings["local"] else None},
-        "ocr_cloud": {"configured": bool(settings["cloud"]),
-                      "model": settings["cloud"][1] if settings["cloud"] else None,
-                      "used_only_when": "ocr='cloud' is passed"},
+        **pdfread.describe_settings(),
         "cache": str(_cache_dir()),
     }
 
@@ -1010,6 +947,8 @@ def run(fn, *args, **kwargs):
     try:
         return json.dumps({"ok": True, **fn(*args, **kwargs)}, ensure_ascii=False, default=str)
     except FileError as exc:
+        return json.dumps({"ok": False, "error": str(exc), "hint": exc.hint}, ensure_ascii=False)
+    except pdfread.PdfError as exc:
         return json.dumps({"ok": False, "error": str(exc), "hint": exc.hint}, ensure_ascii=False)
     except msgfile.MsgError as exc:
         return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
@@ -1036,9 +975,23 @@ def main(argv=None):
     g.add_argument("path")
     g.add_argument("--pages", default="1")
     g.add_argument("--dpi", type=int, default=150)
+    f = sub.add_parser("find", help="search inside a file or a folder")
+    f.add_argument("path")
+    f.add_argument("query")
+    f.add_argument("--regex", action="store_true")
+    f.add_argument("--exact", action="store_true", help="case and accents must match")
+    f.add_argument("--pages")
+    f.add_argument("--ocr", default="auto", choices=["auto", "never", "cloud"])
+    f.add_argument("--attachment")
+    f.add_argument("--recursive", action="store_true")
+    f.add_argument("--max-hits", type=int, default=FIND_MAX_HITS)
     sub.add_parser("status")
     args = ap.parse_args(argv)
-    if args.command == "read":
+    if args.command == "find":
+        out = run(find_in_files, args.path, args.query, regex=args.regex, exact=args.exact,
+                  pages=args.pages, ocr=args.ocr, attachment=args.attachment,
+                  recursive=args.recursive, max_hits=args.max_hits)
+    elif args.command == "read":
         out = run(read_file, args.path, pages=args.pages, ocr=args.ocr,
                   attachment=args.attachment, max_chars=args.max_chars)
     elif args.command == "attachments":

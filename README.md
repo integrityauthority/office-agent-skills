@@ -91,7 +91,7 @@ editing `config.yaml`:
 |---|---|---|
 | `office-connector` | Work in the Word, Excel and PowerPoint documents you already have open | `office_status`, `office_exec`, `office_reset` |
 | `ms-graph-connector` | Read your own Microsoft 365: Outlook mail, OneDrive and SharePoint files, Teams chats, calendar | `m365_status`, `m365_login`, `m365_search`, `m365_get` |
-| `file-connector` | Read PDF (with OCR for scanned pages), .msg and .eml e-mails with attachments, Word, Excel and PowerPoint files from disk | `file_read`, `file_attachments`, `file_render` |
+| `file-connector` | Read PDF (with OCR for scanned pages), .msg and .eml e-mails with attachments, Word, Excel and PowerPoint files from disk | `file_read`, `file_find`, `file_attachments`, `file_render` |
 
 ```bash
 hermes plugins install integrityauthority/office-agent-skills#plugins/office-connector

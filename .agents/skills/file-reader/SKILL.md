@@ -14,6 +14,8 @@ an .msg or an .eml: this tool already does it, and it is faster.
 |---|---|
 | a file's text | `file_read(path)` |
 | some PDF pages | `file_read(path, pages="3-5,9")` |
+| where something is in a long document | `file_find(path, "words")` |
+| which files in a folder mention it | `file_find(folder, "words")` (`recursive=true` for subfolders) |
 | an e-mail: headers, body, attachment list | `file_read(path)` on the .msg / .eml |
 | one attachment, without saving it | `file_read(path, attachment="2")` |
 | an attachment of an attached e-mail | `file_read(path, attachment="2/1")` |
@@ -37,6 +39,13 @@ follow the hint instead of retrying the same call.
 - **Word / Excel / PowerPoint**: `text`; for Excel one block per sheet, for
   PowerPoint one per slide.
 - `truncated: true` means the text was cut. `next` says which pages to ask for.
+- **Search** (`file_find`): `hit_count` and `hits`, each with `where` (`page 12`,
+  `slide 3`, `sheet Adatok, row 40`, `body, line 7`, `attachment 2 (x.pdf) ›
+  page 3`) and a `snippet` with the match between « ». Cite `where`. A folder
+  answer has `files_with_hits` (path, count, first matches), most hits first.
+  `not_searched` lists pages without text (search the file on its own, or
+  agree OCR); a folder search reads text layers only, newest files first,
+  within 45 seconds.
 
 ## Scanned PDFs and where the pages go
 
@@ -71,12 +80,17 @@ The same functions, from Python in `scripts/files.py`:
 
 ```python
 import sys; sys.path.insert(0, r"<skill dir>\scripts")
-from files import read_file, save_attachments, render_pages, status
+from files import read_file, find_in_files, save_attachments, render_pages, status
 read_file(r"C:\path\file.pdf", pages="1-3")
+find_in_files(r"C:\path\file.pdf", "words")
 ```
 
 or from a terminal: `py scripts/files.py read <path> [--pages 1-3] [--attachment 2]`,
-`attachments <path>`, `render <path> --pages 1`, `status`.
+`find <path> "words" [--regex] [--recursive]`, `attachments <path>`,
+`render <path> --pages 1`, `status`.
+
+`scripts/pdfread.py` is the PDF and OCR reader this skill shares with
+m365-graph; it is generated from `shared/pdfread.py` in the repository.
 
 Libraries: pypdfium2 (PDF text and rendering), pdfplumber (tables, optional),
 pdfminer.six (text fallback),
