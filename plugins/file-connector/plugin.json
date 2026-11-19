@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "file-connector",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Let Hermes read files from disk in one call: PDF (scanned pages through the organisation's OCR model), Outlook .msg and .eml e-mails with their attachments, Word, Excel, PowerPoint, HTML and text. Reads an attachment in place, saves attachments to a folder, renders PDF pages for a vision model. Read-only; a page with a text layer never leaves the machine.",
   "author": {
     "name": "Integritás Hatóság",

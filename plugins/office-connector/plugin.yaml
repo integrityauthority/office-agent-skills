@@ -1,6 +1,6 @@
 manifest_version: 2
 name: office-connector
-version: 1.3.1
+version: 1.3.2
 description: >-
   Let Hermes work in Word, Excel, PowerPoint and classic Outlook. Drives the
   documents you already have open rather than producing new files, so edits
