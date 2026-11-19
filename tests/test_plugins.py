@@ -46,7 +46,8 @@ def first_sentence(description):
 
 def test_file_connector_registers_and_dispatches(tmp_path):
     ctx = load("file-connector")
-    assert set(ctx.tools) == {"file_read", "file_find", "file_attachments", "file_render"}
+    assert set(ctx.tools) == {"file_read", "file_find", "file_attachments", "file_render",
+                              "file_collect", "file_unpack"}
     assert ctx.skills == ["file-reader"]
     pdf = tmp_path / "a.pdf"
     pdf.write_bytes(build_pdf(["Az összeférhetetlenségi szabályok szövege"]))

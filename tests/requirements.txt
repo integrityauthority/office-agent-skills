@@ -6,6 +6,7 @@ pdfminer.six
 olefile
 openpyxl
 pillow
+pypdf
 # Windows OCR; the real-engine test is skipped elsewhere.
 winrt-runtime; sys_platform == "win32"
 winrt-Windows.Media.Ocr; sys_platform == "win32"

@@ -98,7 +98,7 @@ wherever you are:
 |---|---|---|
 | `office-connector` | Work in the Word, Excel, PowerPoint and Outlook windows you already have open (Windows) | `office_status`, `office_exec`, `office_reset` |
 | `ms-graph-connector` | Read your own Microsoft 365: Outlook mail, OneDrive and SharePoint files, Teams chats, calendar | `m365_status`, `m365_login`, `m365_search`, `m365_get` |
-| `file-connector` | Read and search PDF (with OCR for scanned pages), .msg and .eml e-mails with attachments, Word, Excel and PowerPoint files from disk | `file_read`, `file_find`, `file_attachments`, `file_render` |
+| `file-connector` | Read and search PDF (with OCR for scanned pages), .msg and .eml e-mails with attachments, Word, Excel and PowerPoint files and .zip archives from disk; tabulate a folder of letters or documents | `file_read`, `file_find`, `file_collect`, `file_unpack`, `file_attachments`, `file_render` |
 
 **Hermes Agent**: the tools appear in the tool catalogue.
 

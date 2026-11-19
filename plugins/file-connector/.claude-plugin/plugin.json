@@ -1,7 +1,7 @@
 {
   "name": "file-connector",
-  "version": "1.4.1",
-  "description": "Let Hermes read files from disk in one call: PDF (scanned pages through the organisation's OCR model), Outlook .msg and .eml e-mails with their attachments, Word, Excel, PowerPoint, HTML and text. Reads an attachment in place, saves attachments to a folder, renders PDF pages for a vision model. Read-only; a page with a text layer never leaves the machine.",
+  "version": "1.5.0",
+  "description": "Let Hermes read files from disk in one call: PDF (scanned pages through the organisation's OCR model), Outlook .msg and .eml e-mails with their attachments, Word, Excel, PowerPoint, HTML and text. Reads an attachment in place, saves attachments to a folder, renders PDF pages for a vision model, reads and safely unpacks .zip archives, and tabulates a folder of letters or documents. Read-only; a page with a text layer never leaves the machine.",
   "author": {
     "name": "Integritás Hatóság",
     "url": "https://github.com/integrityauthority"

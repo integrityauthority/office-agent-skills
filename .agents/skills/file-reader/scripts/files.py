@@ -39,6 +39,8 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import archive  # noqa: E402
+import docmeta  # noqa: E402
 import msgfile  # noqa: E402
 import pdfread  # noqa: E402
 
@@ -227,6 +229,15 @@ def read_pdf(data, pages=None, ocr="auto", max_chars=TEXT_LIMIT):
         "text": text,
         "truncated": truncated,
     }
+    try:
+        details = docmeta.pdf_details(data)
+    except Exception:
+        details = {}
+    if details.get("signed"):
+        result["signed"] = True
+        result["signers"] = details.get("signers") or []
+    if details.get("form_fields"):
+        result["form_fields"] = details["form_fields"]
     if r["ocr_upgrade"]:
         result["ocr_upgrade"] = r["ocr_upgrade"]
     if r["cloud_offer"]:
@@ -386,10 +397,14 @@ def _pick_attachment(data, kind, which):
     steps = [s for s in str(which).split("/") if s.strip()] if re.fullmatch(r"[\d/ ]+", str(which)) else [which]
     name = ""
     for step in steps:
+        if kind == "zip":                       # a member of an archive, read in place
+            name, data = archive.read_member(data, step)
+            kind = detect_kind(data, name)
+            continue
         if kind == "msg-object":
             msg = data
         elif kind not in ("msg", "eml"):
-            raise FileError(f"{name or 'this file'} is not an e-mail, so it has no attachments")
+            raise FileError(f"{name or 'this file'} is not an e-mail or a zip, so it has no attachments")
         else:
             msg = None
         listing = (msg.summary() if msg is not None else
@@ -451,9 +466,18 @@ def read_docx(data, max_chars=TEXT_LIMIT):
     _docx_block(body if body is not None else root, lines)
     text = re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
     text, truncated = _clip(text, max_chars)
-    return {"kind": "docx", "text": text, "truncated": truncated,
-            "notes": ["Deleted tracked text is left out; inserted text is included. Headers, footers "
-                      "and comments are not read. For the open document use office-live."]}
+    result = {"kind": "docx", "text": text, "truncated": truncated}
+    try:
+        details = docmeta.docx_details(data)
+    except Exception:
+        details = {}
+    for key in ("comments", "revisions", "checkboxes"):
+        if details.get(key):
+            result[key] = details[key]
+    result["notes"] = ["text is the document as it reads now: tracked deletions left out, insertions "
+                       "in. revisions lists both with author and date. Headers and footers are not "
+                       "read. For a document open on screen use office-live."]
+    return result
 
 
 def read_pptx(data, max_chars=TEXT_LIMIT):
@@ -558,16 +582,35 @@ def _read_bytes(data, name, kind, pages, ocr, max_chars):
             f"{name} is a legacy Office file (.doc, .xls or .ppt)",
             "Open it with office-live: doc = open_doc(path), then read it there.")
     if kind == "zip":
-        with zipfile.ZipFile(io.BytesIO(data)) as zf:
-            listing = [{"name": i.filename, "size": i.file_size} for i in zf.infolist()[:200]]
-        return {"kind": "zip", "entries": listing,
-                "notes": ["A zip archive: listed, not extracted."]}
+        members, total = archive.list_members(data)
+        return {"kind": "zip", "member_count": total, "members": members[:200],
+                "next": "Read a member in place with attachment='<index or name>', search inside with "
+                        "file_find, or extract with file_unpack."}
     raise FileError(f"{name} is not a format this reader knows ({kind})",
-                    "PDF, .msg, .eml, .docx, .xlsx, .pptx, HTML and text are supported.")
+                    "PDF, .msg, .eml, .docx, .xlsx, .pptx, .zip, HTML and text are supported.")
 
 
-def read_file(path, pages=None, ocr="auto", attachment=None, max_chars=TEXT_LIMIT):
-    """Read one file, or one attachment inside an e-mail file, as text."""
+def extract_labels(text, labels):
+    """For each label, the value written after it: 'Tulajdonos: Kiss Anna' gives
+    {'tulajdonos': 'Kiss Anna'}. Case and accents are ignored; the value runs to
+    the end of the line. A label not found is left out."""
+    found = {}
+    folded, index = _fold(text or "")
+    for label in labels or []:
+        key = _fold(str(label).strip())[0]
+        if not key:
+            continue
+        pattern = re.compile(r"(?<!\w)" + r"\s+".join(map(re.escape, key.split())) + r"\s*[:=\-–]?[ \t]*([^\n]{1,200})")
+        match = pattern.search(folded)
+        if match and match.group(1).strip():
+            start, end = index[match.start(1)], index[match.end(1) - 1] + 1
+            found[str(label)] = text[start:end].strip()
+    return found
+
+
+def read_file(path, pages=None, ocr="auto", attachment=None, max_chars=TEXT_LIMIT, labels=None):
+    """Read one file, or one attachment or archive member inside it, as text.
+    labels: names whose values to pick out of the text (see extract_labels)."""
     p = _resolve(path)
     data = p.read_bytes()
     kind = detect_kind(data, p.name)
@@ -578,14 +621,24 @@ def read_file(path, pages=None, ocr="auto", attachment=None, max_chars=TEXT_LIMI
     if attachment not in (None, ""):
         result["attachment"] = {"selector": str(attachment), "name": name}
     result.update(_read_bytes(data, name, kind, pages, ocr, int(max_chars or TEXT_LIMIT)))
+    if labels:
+        result["labels"] = extract_labels(result.get("text", ""), _as_list(labels))
     if kind not in ("msg-object",) and attachment in (None, ""):
         result["size"] = len(data)
     return result
 
 
+def _as_list(value):
+    if value in (None, ""):
+        return []
+    if isinstance(value, (list, tuple)):
+        return [str(v) for v in value if str(v).strip()]
+    return [part.strip() for part in str(value).split(",") if part.strip()]
+
+
 # ------------------------------------------------------------------- search ---
 
-SEARCHABLE_EXTENSIONS = {".pdf", ".msg", ".eml", ".docx", ".xlsx", ".pptx"} | HTML_EXTENSIONS | TEXT_EXTENSIONS
+SEARCHABLE_EXTENSIONS = {".pdf", ".msg", ".eml", ".docx", ".xlsx", ".pptx", ".zip"} | HTML_EXTENSIONS | TEXT_EXTENSIONS
 FIND_MAX_FILES = 300
 FIND_MAX_HITS = 50
 FIND_CONTEXT = 80
@@ -691,7 +744,7 @@ def _search_units(data, name, kind, pages, ocr, meta, prefix="", depth=0):
                 else:
                     sub_name, payload, sub_kind = _attachment_of(data, "msg" if kind == "msg" else "eml", att["index"])
                 yield from _search_units(payload, sub_name, sub_kind, None, ocr, meta, label, depth + 1)
-            except (FileError, msgfile.MsgError, pdfread.PdfError) as exc:
+            except (FileError, msgfile.MsgError, pdfread.PdfError, archive.ArchiveError) as exc:
                 meta["notes"].append(f"{label}not searched: {exc}")
         return
     if kind == "xlsx":
@@ -727,6 +780,21 @@ def _search_units(data, name, kind, pages, ocr, meta, prefix="", depth=0):
     if kind in ("docx", "html", "text"):
         result = _read_bytes(data, name, kind, None, "never", 10 ** 9)
         yield f"{prefix}{'document' if kind == 'docx' else 'text'}", result["text"], True
+        return
+    if kind == "zip":
+        if depth >= FIND_ATTACHMENT_DEPTH:
+            return
+        members, _ = archive.list_members(data)
+        for member in members:
+            if member.get("unreadable") or member["suffix"] not in SEARCHABLE_EXTENSIONS | {".zip"}:
+                continue
+            label = f"{prefix}{member['name']} › "
+            try:
+                sub_name, payload = archive.read_member(data, str(member["index"]))
+                yield from _search_units(payload, sub_name, detect_kind(payload, sub_name), None,
+                                         "never" if ocr == "auto" else ocr, meta, label, depth + 1)
+            except (FileError, msgfile.MsgError, pdfread.PdfError, archive.ArchiveError) as exc:
+                meta["notes"].append(f"{label}not searched: {exc}")
         return
     meta["notes"].append(f"{prefix or name}: {kind} files are not searched.")
 
@@ -784,7 +852,7 @@ def find_in_files(path, query, regex=False, exact=False, pages=None, ocr="auto",
                 data = p.read_bytes()
                 hits, count = _search_file(data, p.name, detect_kind(data, p.name), find,
                                            None, "never", 3, meta)
-            except (FileError, msgfile.MsgError, pdfread.PdfError) as exc:
+            except (FileError, msgfile.MsgError, pdfread.PdfError, archive.ArchiveError) as exc:
                 failed.append({"path": str(p), "error": str(exc)})
                 continue
             except Exception as exc:
@@ -842,6 +910,187 @@ def find_in_files(path, query, regex=False, exact=False, pages=None, ocr="auto",
     if meta["notes"]:
         result["notes"] = meta["notes"]
     return result
+
+
+# ----------------------------------------------------------------- collect ---
+
+COLLECT_PREVIEW_ROWS = 100
+COLLECT_EXCERPT = 300
+
+
+def _collect_items(target: Path, recursive: bool, notes: list):
+    """(relative name, bytes) for every readable document in a folder or a zip."""
+    import time
+    started = time.monotonic()
+    if target.is_dir():
+        pattern = "**/*" if recursive else "*"
+        paths = sorted((p for p in target.glob(pattern) if p.is_file() and p.suffix.lower() in SEARCHABLE_EXTENSIONS
+                        and p.suffix.lower() != ".zip" and not p.name.startswith("~$")),
+                       key=lambda p: str(p).lower())
+        for p in paths[:FIND_MAX_FILES]:
+            if time.monotonic() - started > FIND_TIME_BUDGET:
+                notes.append(f"Stopped after {FIND_TIME_BUDGET} s; narrow the folder for the rest.")
+                return
+            if p.stat().st_size > FIND_FOLDER_MAX_BYTES:
+                notes.append(f"{p.name}: above {FIND_FOLDER_MAX_BYTES // 2**20} MB, read it on its own.")
+                continue
+            yield str(p.relative_to(target)), p.read_bytes()
+        if len(paths) > FIND_MAX_FILES:
+            notes.append(f"Only the first {FIND_MAX_FILES} files were collected.")
+        return
+    if target.stat().st_size > archive.MAX_ZIP_BYTES:
+        raise archive.ArchiveError(f"the zip is larger than {archive.MAX_ZIP_BYTES // 2**20} MB",
+                                   "Unpack it with file_unpack, then collect over the folder.")
+    data = target.read_bytes()
+    members, total = archive.list_members(data)
+    if total > len(members):
+        notes.append(f"Only the first {len(members)} of {total} archive members were collected.")
+    for member in members:
+        if member.get("unreadable"):
+            notes.append(f"{member['name']}: {member['unreadable']}")
+            continue
+        if member["suffix"] not in SEARCHABLE_EXTENSIONS or member["suffix"] == ".zip":
+            continue
+        yield member["name"], archive.read_member(data, str(member["index"]))[1]
+
+
+def _collect_row(name, data, labels, find, excerpt):
+    kind = detect_kind(data, name)
+    row = {"file": name, "kind": kind, "size": len(data)}
+    text = ""
+    if kind in ("msg", "eml"):
+        s = msgfile.open_msg(data).summary() if kind == "msg" else _eml_summary(_eml_message(data))
+        text = s["body"] if s["body_source"] != "html" else html_to_text(s["body"])
+        row.update({"subject": s["subject"], "from": s["from"], "to": "; ".join(s["to"]),
+                    "cc": "; ".join(s["cc"]), "date": s["date"],
+                    "attachments": "; ".join(a["name"] for a in s["attachments"] if not a.get("inline"))})
+    elif kind == "pdf":
+        r = pdfread.read_pages(data, ocr="never", tables=False)
+        text = "\n\n".join(r["texts"][i] for i in r["selected"] if r["sources"][i])
+        empty = [i for i in r["selected"] if not r["sources"][i]]
+        row["pages"] = r["count"]
+        if empty:
+            row["scanned_pages"] = pdfread.ranges(empty)
+        details = docmeta.pdf_details(data)
+        if details.get("signers"):
+            row["signers"] = "; ".join(details["signers"])
+        if details.get("form_fields"):
+            row["form_fields"] = "; ".join(f"{k}={v}" for k, v in details["form_fields"].items())
+    elif kind == "docx":
+        text = read_docx(data, 10 ** 9)["text"]
+        details = docmeta.docx_details(data)
+        row["comments"] = len(details["comments"])
+        row["revisions"] = len(details["revisions"])
+        if details["checkboxes"]:
+            row["checked"] = "; ".join(b["label"][:80] for b in details["checkboxes"] if b["checked"])
+    elif kind in ("xlsx", "pptx", "html", "text"):
+        text = _read_bytes(data, name, kind, None, "never", 10 ** 9).get("text", "")
+    else:
+        row["error"] = f"{kind} files are not read"
+        return row
+    first = next((line.strip() for line in text.splitlines()
+                  if line.strip() and not line.startswith("--- ")), "")
+    if kind not in ("msg", "eml"):
+        row["title"] = first[:150]          # the first line of text
+    if labels:
+        for label, value in extract_labels(text, labels).items():
+            row[f"label:{label}"] = value
+    if find is not None:
+        hits = find(text)
+        row["hits"] = len(hits)
+        if hits:
+            row["first_hit"] = _snippet(text, *hits[0], context=60)
+    if excerpt:
+        row["excerpt"] = re.sub(r"\s+", " ", text).strip()[:excerpt]
+    return row
+
+
+def collect_files(path, labels=None, query=None, regex=False, recursive=False,
+                  excerpt=COLLECT_EXCERPT, out=None):
+    """One row per document in a folder or a .zip: what it is (sender, date,
+    subject or first line, pages, signers, form fields, comments...), the
+    values after the given labels, and how often the query occurs.
+
+    Reads only; text layers only (a scanned page is marked, not OCR'd). With
+    more rows than fit an answer, or with out=, the full table is also
+    written as UTF-8 CSV, so a hundred letters do not flood the conversation.
+    """
+    text = os.path.expandvars(os.path.expanduser(str(path or "").strip().strip('"').strip("'")))
+    target = Path(text) if text else None
+    if target is not None and not target.is_absolute():
+        target = Path.cwd() / target
+    if target is None or not target.exists():
+        raise FileError(f"no such folder or file: {target}", "Pass a folder or a .zip.")
+    if target.is_file() and _head_kind(target) != "zip":
+        raise FileError(f"{target.name} is one file", "Use file_read for one file; collect takes a folder or a .zip.")
+    labels = _as_list(labels)
+    find = _matcher(query, regex=regex) if query else None
+    notes, rows = [], []
+    for name, data in _collect_items(target, recursive, notes):
+        try:
+            rows.append(_collect_row(name, data, labels, find, int(excerpt or 0)))
+        except Exception as exc:
+            rows.append({"file": name, "error": f"{type(exc).__name__}: {exc}"})
+    columns = []
+    for row in rows:
+        columns += [key for key in row if key not in columns]
+    result = {"source": str(target), "count": len(rows), "columns": columns,
+              "rows": rows[:COLLECT_PREVIEW_ROWS]}
+    if out or len(rows) > COLLECT_PREVIEW_ROWS:
+        import csv
+        table = Path(os.path.expandvars(os.path.expanduser(out))) if out else \
+            _cache_dir("collect") / f"{_safe_name(target.stem or 'collect')}.csv"
+        table = _unique(table) if out and table.exists() else table
+        table.parent.mkdir(parents=True, exist_ok=True)
+        with table.open("w", encoding="utf-8-sig", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=columns, extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(rows)
+        result["csv"] = str(table)
+        if len(rows) > COLLECT_PREVIEW_ROWS:
+            notes.append(f"{len(rows) - COLLECT_PREVIEW_ROWS} more row(s) are in the CSV only.")
+    if query:
+        result["files_with_hits"] = sum(1 for r in rows if r.get("hits"))
+    result["next"] = ("To give the user this table, write it into an Excel workbook open in front of "
+                      "them with office-live (or open the CSV there), not into a closed file.")
+    if notes:
+        result["notes"] = notes
+    return result
+
+
+def unpack_file(path, dest=None):
+    """Extract a .zip next to itself (or into dest), safely; never overwrites."""
+    text = os.path.expandvars(os.path.expanduser(str(path or "").strip().strip('"').strip("'")))
+    p = Path(text)
+    if not p.is_absolute():
+        p = Path.cwd() / p
+    if not p.is_file():
+        raise FileError(f"no such file: {p}")
+    if _head_kind(p) != "zip":
+        raise FileError(f"{p.name} is not a .zip archive")
+    return archive.unpack(p, dest)
+
+
+def _head_kind(p: Path):
+    """detect_kind without reading the whole file. A truncated zip head would
+    always look like a plain zip, so Office packages are told apart by their
+    member names, read from the file's central directory."""
+    with p.open("rb") as handle:
+        head = handle.read(4096)
+    if not head.startswith(b"PK\x03\x04"):
+        return detect_kind(head, p.name)
+    try:
+        with zipfile.ZipFile(p) as zf:
+            names = zf.namelist()
+    except zipfile.BadZipFile:
+        return "zip"
+    if "word/document.xml" in names:
+        return "docx"
+    if any(n.startswith("xl/") for n in names):
+        return "xlsx"
+    if any(n.startswith("ppt/slides/") for n in names):
+        return "pptx"
+    return "zip"
 
 
 def save_attachments(path, dest=None, which=None, include_inline=False):
@@ -925,6 +1174,7 @@ def status():
             "pdf_text_and_render": "pypdfium2" if has("pypdfium2") else None,
             "pdf_text_fallback": "pdfminer.six" if has("pdfminer") else None,
             "pdf_tables": "pdfplumber" if has("pdfplumber") else None,
+            "pdf_form_fields": "pypdf" if has("pypdf") else None,
             "msg": "olefile" if has("olefile") else None,
             "xlsx": "openpyxl" if has("openpyxl") else None,
             "docx_pptx_eml_html_text": "standard library",
@@ -956,6 +1206,8 @@ def run(fn, *args, **kwargs):
         return json.dumps({"ok": False, "error": str(exc), "hint": exc.hint}, ensure_ascii=False)
     except pdfread.PdfError as exc:
         return json.dumps({"ok": False, "error": str(exc), "hint": exc.hint}, ensure_ascii=False)
+    except archive.ArchiveError as exc:
+        return json.dumps({"ok": False, "error": str(exc), "hint": exc.hint}, ensure_ascii=False)
     except msgfile.MsgError as exc:
         return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
     except Exception as exc:
@@ -972,6 +1224,7 @@ def main(argv=None):
     r.add_argument("--ocr", default="auto", choices=["auto", "server", "cloud", "force", "never"])
     r.add_argument("--attachment")
     r.add_argument("--max-chars", type=int, default=TEXT_LIMIT)
+    r.add_argument("--labels", help="comma-separated labels whose values to pick out")
     a = sub.add_parser("attachments")
     a.add_argument("path")
     a.add_argument("--dest")
@@ -991,15 +1244,31 @@ def main(argv=None):
     f.add_argument("--attachment")
     f.add_argument("--recursive", action="store_true")
     f.add_argument("--max-hits", type=int, default=FIND_MAX_HITS)
+    c = sub.add_parser("collect", help="one row per document in a folder or a .zip")
+    c.add_argument("path")
+    c.add_argument("--labels", help="comma-separated labels whose values to pick out")
+    c.add_argument("--query")
+    c.add_argument("--regex", action="store_true")
+    c.add_argument("--recursive", action="store_true")
+    c.add_argument("--excerpt", type=int, default=COLLECT_EXCERPT)
+    c.add_argument("--out", help="also write the table as CSV here")
+    u = sub.add_parser("unpack", help="extract a .zip safely")
+    u.add_argument("path")
+    u.add_argument("--dest")
     sub.add_parser("status")
     args = ap.parse_args(argv)
-    if args.command == "find":
+    if args.command == "collect":
+        out = run(collect_files, args.path, labels=args.labels, query=args.query, regex=args.regex,
+                  recursive=args.recursive, excerpt=args.excerpt, out=args.out)
+    elif args.command == "unpack":
+        out = run(unpack_file, args.path, dest=args.dest)
+    elif args.command == "find":
         out = run(find_in_files, args.path, args.query, regex=args.regex, exact=args.exact,
                   pages=args.pages, ocr=args.ocr, attachment=args.attachment,
                   recursive=args.recursive, max_hits=args.max_hits)
     elif args.command == "read":
         out = run(read_file, args.path, pages=args.pages, ocr=args.ocr,
-                  attachment=args.attachment, max_chars=args.max_chars)
+                  attachment=args.attachment, max_chars=args.max_chars, labels=args.labels)
     elif args.command == "attachments":
         out = run(save_attachments, args.path, dest=args.dest, which=args.which,
                   include_inline=args.include_inline)

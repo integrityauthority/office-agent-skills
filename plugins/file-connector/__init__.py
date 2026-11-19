@@ -29,6 +29,38 @@ READ_SCHEMA = {
                        "description": "For an .msg/.eml: read this attachment instead, by index "
                                       "('2'), nested index ('2/1') or file name."},
         "max_chars": {"type": "integer", "description": "Cap on returned text. Default 40000."},
+        "labels": {"type": "string",
+                   "description": "Comma-separated labels whose values to pick out, e.g. "
+                                  "'Iktatószám, Tulajdonos': 'Iktatószám: 123/2026' gives "
+                                  "{'Iktatószám': '123/2026'}. Case and accents are ignored."},
+    },
+    "required": ["path"],
+}
+
+COLLECT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "path": {"type": "string", "description": "Full path of a folder, or of a .zip archive."},
+        "labels": {"type": "string", "description": "Comma-separated labels whose values become "
+                                                    "columns, e.g. 'Iktatószám, Határidő'."},
+        "query": {"type": "string", "description": "Words to count in each file (case and accents "
+                                                   "ignored); adds 'hits' and 'first_hit' columns."},
+        "regex": {"type": "boolean", "description": "Treat query as a regular expression."},
+        "recursive": {"type": "boolean", "description": "Folder: include subfolders."},
+        "excerpt": {"type": "integer", "description": "Characters of text per row. Default 300; "
+                                                      "0 for none."},
+        "out": {"type": "string", "description": "Also write the table as a UTF-8 CSV here. "
+                                                 "Written anyway when there are over 100 rows."},
+    },
+    "required": ["path"],
+}
+
+UNPACK_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "path": {"type": "string", "description": "Full path of the .zip archive."},
+        "dest": {"type": "string", "description": "Folder to extract into. Default: a folder named "
+                                                  "after the zip, next to it."},
     },
     "required": ["path"],
 }
@@ -90,7 +122,20 @@ def register(ctx):
         a = args or {}
         return files.run(files.read_file, a.get("path"), pages=a.get("pages"),
                          ocr=a.get("ocr") or "auto", attachment=a.get("attachment"),
-                         max_chars=a.get("max_chars") or files.TEXT_LIMIT)
+                         max_chars=a.get("max_chars") or files.TEXT_LIMIT, labels=a.get("labels"))
+
+    def _collect(args=None, **_):
+        a = args or {}
+        excerpt = a.get("excerpt")
+        return files.run(files.collect_files, a.get("path"), labels=a.get("labels"),
+                         query=a.get("query"), regex=bool(a.get("regex")),
+                         recursive=bool(a.get("recursive")),
+                         excerpt=files.COLLECT_EXCERPT if excerpt is None else excerpt,
+                         out=a.get("out"))
+
+    def _unpack(args=None, **_):
+        a = args or {}
+        return files.run(files.unpack_file, a.get("path"), dest=a.get("dest"))
 
     def _attachments(args=None, **_):
         a = args or {}
@@ -126,11 +171,31 @@ def register(ctx):
         description=(
             # The tool-search catalogue shows the first sentence, cut at 60 characters.
             "Read a PDF, e-mail (.msg/.eml) or Office file as text. "
-            "Scanned PDF pages go to your own OCR server; an e-mail comes back as "
-            "headers, body and an attachment list, and attachment='2' reads one "
-            "attachment in place. Also .docx, .xlsx, .pptx, HTML and text. Read-only."
+            "Scanned pages go through OCR; an e-mail comes back as headers, body and an "
+            "attachment list, and attachment='2' reads one attachment in place -- or one "
+            "member of a .zip. Word comments, tracked changes and ticked boxes, PDF signers "
+            "and form fields come along; labels= picks out values. Read-only."
         ),
         emoji="\N{OPEN BOOK}",
+    )
+    ctx.register_tool(
+        "file_collect", "files", COLLECT_SCHEMA, _collect,
+        description=(
+            "Tabulate a folder or .zip of letters and documents. "
+            "One row per file: sender, date and subject of an e-mail, first line, pages, "
+            "signers, form fields, comment and revision counts, the values after the "
+            "given labels and the query hits. Large tables also go to a CSV. Read-only."
+        ),
+        emoji="\N{CARD INDEX DIVIDERS}",
+    )
+    ctx.register_tool(
+        "file_unpack", "files", UNPACK_SCHEMA, _unpack,
+        description=(
+            "Extract a .zip archive safely to a folder. "
+            "Never overwrites; skips paths that would escape the folder, encrypted members "
+            "and zip bombs. To read one member, file_read with attachment= is enough."
+        ),
+        emoji="\N{PACKAGE}",
     )
     ctx.register_tool(
         "file_attachments", "files", ATTACH_SCHEMA, _attachments,
