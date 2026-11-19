@@ -95,6 +95,13 @@ def emit(payload, code=0):
     note = _prefer_note()
     if note:
         payload = dict(payload, prefer=note)
+    # A pipe on Windows defaults to the ANSI code page (cp1252), which cannot
+    # write ő or ű: every answer naming a Hungarian document or mail failed
+    # with UnicodeEncodeError when an agent ran this from its terminal.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
     print(json.dumps(payload, ensure_ascii=False))
     sys.exit(code)
 
