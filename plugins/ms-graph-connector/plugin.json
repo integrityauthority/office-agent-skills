@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "ms-graph-connector",
-  "version": "2.1.0",
+  "version": "3.0.0",
   "description": "Give Hermes read access to your own Microsoft 365: Outlook mail, OneDrive and SharePoint documents, Teams chats and your calendar, through the Microsoft Graph API. It sees exactly what you see and nothing more, signs you in through your browser, and cannot write -- every tool here is read-only.",
   "author": {
     "name": "Integritás Hatóság",

@@ -227,6 +227,8 @@ def read_pdf(data, pages=None, ocr="auto", max_chars=TEXT_LIMIT):
         "text": text,
         "truncated": truncated,
     }
+    if r["ocr_upgrade"]:
+        result["ocr_upgrade"] = r["ocr_upgrade"]
     if r["cloud_offer"]:
         result["cloud_ocr_needs_approval"] = r["cloud_offer"]
     if truncated:
@@ -660,6 +662,8 @@ def _search_units(data, name, kind, pages, ocr, meta, prefix="", depth=0):
             meta["unsearched"].append(f"{prefix}page(s) {pdfread.ranges(empty)}")
         if r["cloud_offer"] and not prefix:
             meta["cloud_offer"] = r["cloud_offer"]
+        if r["ocr_upgrade"] and not prefix:
+            meta["ocr_upgrade"] = r["ocr_upgrade"]
         for i in r["selected"]:
             if r["sources"][i]:
                 yield f"{prefix}page {i + 1}", r["texts"][i], False
@@ -775,7 +779,7 @@ def find_in_files(path, query, regex=False, exact=False, pages=None, ocr="auto",
                 too_big.append(str(p))
                 continue
             searched += 1
-            meta = {"notes": [], "unsearched": [], "cloud_offer": None}
+            meta = {"notes": [], "unsearched": [], "cloud_offer": None, "ocr_upgrade": None}
             try:
                 data = p.read_bytes()
                 hits, count = _search_file(data, p.name, detect_kind(data, p.name), find,
@@ -822,7 +826,7 @@ def find_in_files(path, query, regex=False, exact=False, pages=None, ocr="auto",
     name = p.name
     if attachment not in (None, ""):
         name, data, kind = _pick_attachment(data, kind, attachment)
-    meta = {"notes": [], "unsearched": [], "cloud_offer": None}
+    meta = {"notes": [], "unsearched": [], "cloud_offer": None, "ocr_upgrade": None}
     hits, total = _search_file(data, name, kind, find, pages, ocr, max_hits, meta)
     result = {"path": str(p), "query": query, "kind": kind, "hit_count": total, "hits": hits}
     if attachment not in (None, ""):
@@ -831,6 +835,8 @@ def find_in_files(path, query, regex=False, exact=False, pages=None, ocr="auto",
         result["next"] = f"{total - len(hits)} more match(es); raise max_hits or narrow with pages=."
     if meta["unsearched"]:
         result["not_searched"] = meta["unsearched"]
+    if meta["ocr_upgrade"]:
+        result["ocr_upgrade"] = meta["ocr_upgrade"]
     if meta["cloud_offer"]:
         result["cloud_ocr_needs_approval"] = meta["cloud_offer"]
     if meta["notes"]:
@@ -963,7 +969,7 @@ def main(argv=None):
     r = sub.add_parser("read")
     r.add_argument("path")
     r.add_argument("--pages")
-    r.add_argument("--ocr", default="auto", choices=["auto", "never", "force", "cloud"])
+    r.add_argument("--ocr", default="auto", choices=["auto", "server", "cloud", "force", "never"])
     r.add_argument("--attachment")
     r.add_argument("--max-chars", type=int, default=TEXT_LIMIT)
     a = sub.add_parser("attachments")
@@ -981,7 +987,7 @@ def main(argv=None):
     f.add_argument("--regex", action="store_true")
     f.add_argument("--exact", action="store_true", help="case and accents must match")
     f.add_argument("--pages")
-    f.add_argument("--ocr", default="auto", choices=["auto", "never", "cloud"])
+    f.add_argument("--ocr", default="auto", choices=["auto", "server", "cloud", "never"])
     f.add_argument("--attachment")
     f.add_argument("--recursive", action="store_true")
     f.add_argument("--max-hits", type=int, default=FIND_MAX_HITS)

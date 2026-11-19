@@ -17,9 +17,8 @@ for path in (ROOT / "tests", ROOT / "tools",
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-OCR_VARS = ("OCR_URL", "OCR_MODEL", "OCR_API_KEY", "OCR_CLOUD_URL", "OCR_CLOUD_MODEL",
-            "OCR_CLOUD_API_KEY", "OCR_CLOUD_API_KEY_ENV",
-            "AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT", "AZURE_DOCUMENT_INTELLIGENCE_KEY")
+OCR_VARS = ("OCR_LOCAL", "OCR_LOCAL_LANGUAGE", "OCR_URL", "OCR_MODEL", "OCR_API_KEY",
+            "OCR_CLOUD_URL", "OCR_CLOUD_MODEL", "OCR_CLOUD_API_KEY", "OCR_CLOUD_API_KEY_ENV")
 
 # A port nothing listens on: connections are refused at once.
 UNREACHABLE = "http://127.0.0.1:9/v1"
@@ -27,9 +26,36 @@ UNREACHABLE = "http://127.0.0.1:9/v1"
 
 @pytest.fixture(autouse=True)
 def clean_ocr_env(monkeypatch):
-    """No test sees the OCR settings of the machine it runs on."""
+    """No test sees the OCR settings of the machine it runs on. Windows OCR is
+    off unless a test turns it on (or fakes it), so results do not depend on
+    whether the machine is Windows with pywinrt."""
     for name in OCR_VARS:
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("OCR_LOCAL", "off")
+
+
+@pytest.fixture
+def fake_local_ocr(monkeypatch):
+    """Windows OCR replaced by a stand-in, so the order can be tested anywhere.
+    Every call is recorded; set .reply or .error to change what it does."""
+    import pdfread
+
+    class Fake:
+        reply = "Windows OCR szövege az oldalról, elég hosszú ahhoz, hogy számítson."
+        error = None
+        calls = []
+
+    def recognize(png, language=""):
+        Fake.calls.append(language)
+        if Fake.error:
+            raise Fake.error
+        return Fake.reply
+
+    Fake.calls = []
+    monkeypatch.setenv("OCR_LOCAL", "on")
+    monkeypatch.setattr(pdfread, "local_settings", lambda: (pdfread._env("OCR_LOCAL_LANGUAGE"),))
+    monkeypatch.setattr(pdfread, "local_ocr_page", recognize)
+    return Fake
 
 
 class FakeOcr:

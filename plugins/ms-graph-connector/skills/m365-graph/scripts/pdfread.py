@@ -4,28 +4,34 @@ This file is the source. `tools/sync_plugins.py` copies it into
 ``.agents/skills/<skill>/scripts/pdfread.py`` for every skill that needs it,
 and CI fails if a copy drifts. Edit it here, run the sync, commit both.
 
-The order, for every page asked for:
+A page with a text layer is read on this machine, always. A scanned page goes
+to the engine the ``ocr`` argument names, cheapest and most private first:
 
-1. the text layer, on this machine (pypdfium2; tables by pdfplumber when
-   installed; pdfminer.six when pypdfium2 is missing);
-2. your own OCR server (``OCR_URL``) for pages without one -- always;
-3. only with ``ocr="cloud"``, which the agent passes after the user agreed:
-   Azure Document Intelligence (when configured), then the cloud vision model
-   (``OCR_CLOUD_*``), for pages still empty.
+    auto    Windows' own OCR, on this machine; your OCR server when there is
+            no Windows OCR here
+    server  your OCR server (``OCR_URL``), which reads tables and numbers
+            better; Windows OCR when the server cannot be reached
+    cloud   the cloud vision model (``OCR_CLOUD_*``) -- only after the user
+            agreed; then the server, then Windows OCR
+    force   like server, for every page, even one with a text layer
+    never   text layers only
 
-When pages stay empty and a cloud model could read them, the result carries
-``cloud_offer`` instead of sending anything.
+So the agent starts with the fast local reading, and asks for ``server`` when
+that text looks wrong; ``ocr_upgrade`` in the result says which pages, and
+``cloud_offer`` lists pages nothing local could read. Neither sends anything.
 
 Configuration, all from the environment:
 
+    OCR_LOCAL_LANGUAGE                     Windows OCR language, e.g. hu; default:
+                                           the user's Windows languages
+    OCR_LOCAL=off                          do not use Windows OCR
     OCR_URL, OCR_MODEL, OCR_API_KEY        your OpenAI-compatible OCR server
     OCR_CLOUD_URL, OCR_CLOUD_MODEL         a model behind the OpenAI Responses API
     OCR_CLOUD_API_KEY                      its key, or OCR_CLOUD_API_KEY_ENV:
                                            the name of the variable holding it
-    AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT   optional Azure layout model
-    AZURE_DOCUMENT_INTELLIGENCE_KEY
 
-Every library here is permissively licensed. PyMuPDF (AGPL-3.0) is not used.
+Every library here is permissively licensed: pypdfium2, pdfplumber,
+pdfminer.six, pywinrt (MIT). PyMuPDF (AGPL-3.0) is not used.
 """
 from __future__ import annotations
 
@@ -35,26 +41,31 @@ import io
 import json
 import os
 import re
+import sys
 import urllib.error
 import urllib.parse
 import urllib.request
 
 TEXT_MIN = 20                 # fewer characters than this: the page has no text layer
-OCR_PAGES_PER_CALL = 10       # one call never waits on more OCR than this
+OCR_PAGES_PER_CALL = 10       # one call never waits on more remote OCR than this
+LOCAL_PAGES_PER_CALL = 50     # Windows OCR takes well under a second a page
 SERVER_DPI = 200
 CLOUD_DPI = 250
+LOCAL_DPI = 300               # Windows OCR reads small print better from more pixels
+LOCAL_MAX_PIXELS = 9_999      # OcrEngine.MaxImageDimension is 10000
 OCR_MODEL_DEFAULT = "deepseek-ai/DeepSeek-OCR-2"
 DEEPSEEK_OCR_PROMPT = "<|grounding|>Convert the document to markdown."
 TRANSCRIBE_PROMPT = (
     "This is one scanned document page. Transcribe every visible character, "
     "printed and filled in, including numbers and dates. Do not summarise."
 )
+MODES = ("auto", "server", "cloud", "force", "never")
 
 # Labels for where a page's text came from. The same in both skills.
 TEXT_LAYER = "text-layer"
 PDFMINER = "pdfminer"
+LOCAL_OCR = "windows-ocr"
 OCR_SERVER = "ocr-server"
-CLOUD_DI = "azure-document-intelligence"
 CLOUD_VISION = "cloud-vision"
 
 
@@ -62,6 +73,10 @@ class PdfError(Exception):
     def __init__(self, message, hint=""):
         super().__init__(message)
         self.hint = hint
+
+
+class EngineUnavailable(Exception):
+    """An OCR engine that cannot run here at all; the next one is tried."""
 
 
 # ------------------------------------------------------------------ small ---
@@ -101,9 +116,25 @@ def _env(name, default=""):
 
 # --------------------------------------------------------------- settings ---
 
+def local_settings():
+    """(language,) when Windows OCR can run here, else None. language "" means
+    the user's own Windows languages."""
+    if _env("OCR_LOCAL").lower() in ("0", "off", "false", "no"):
+        return None
+    if sys.platform != "win32":
+        return None
+    import importlib.util
+    try:
+        if importlib.util.find_spec("winrt.windows.media.ocr") is None:
+            return None
+    except ModuleNotFoundError:  # no winrt package at all
+        return None
+    return (_env("OCR_LOCAL_LANGUAGE"),)
+
+
 def settings():
-    """{'server': (url, model, key) | None, 'cloud': (url, model, key) | None,
-    'di': (endpoint, key) | None}"""
+    """{'local': (language,) | None, 'server': (url, model, key) | None,
+    'cloud': (url, model, key) | None}"""
     server_url = _env("OCR_URL").rstrip("/")
     server = (server_url, _env("OCR_MODEL", OCR_MODEL_DEFAULT), _env("OCR_API_KEY")) if server_url else None
     cloud_key = _env("OCR_CLOUD_API_KEY")
@@ -111,19 +142,17 @@ def settings():
         cloud_key = _env(_env("OCR_CLOUD_API_KEY_ENV"))
     cloud_url, cloud_model = _env("OCR_CLOUD_URL").rstrip("/"), _env("OCR_CLOUD_MODEL")
     cloud = (cloud_url, cloud_model, cloud_key) if cloud_url and cloud_model and cloud_key else None
-    di_endpoint = _env("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT").rstrip("/")
-    di_key = _env("AZURE_DOCUMENT_INTELLIGENCE_KEY")
-    di = (di_endpoint, di_key) if di_endpoint and di_key else None
-    return {"server": server, "cloud": cloud, "di": di}
+    return {"local": local_settings(), "server": server, "cloud": cloud}
 
 
 def describe_settings():
     s = settings()
     return {
+        "ocr_local": {"available": bool(s["local"]), "engine": "Windows OCR" if s["local"] else None,
+                      "language": (s["local"][0] or "user profile") if s["local"] else None},
         "ocr_server": {"configured": bool(s["server"]), "model": s["server"][1] if s["server"] else None},
         "ocr_cloud": {"configured": bool(s["cloud"]), "model": s["cloud"][1] if s["cloud"] else None,
                       "used_only_when": "ocr='cloud' is passed, after the user agreed"},
-        "azure_document_intelligence": {"configured": bool(s["di"])},
     }
 
 
@@ -172,6 +201,43 @@ def clean_ocr(text):
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
+def local_ocr_page(png, language=""):
+    """Windows.Media.Ocr on a PNG, on this machine. Runs its own event loop on
+    a worker thread, so it works whether or not the caller is inside one."""
+    import asyncio
+    import concurrent.futures
+
+    async def recognize():
+        from winrt.windows.globalization import Language
+        from winrt.windows.graphics.imaging import BitmapDecoder
+        from winrt.windows.media.ocr import OcrEngine
+        from winrt.windows.storage.streams import DataWriter, InMemoryRandomAccessStream
+
+        if language:
+            engine = OcrEngine.try_create_from_language(Language(language))
+            if engine is None:
+                available = [l.language_tag for l in OcrEngine.available_recognizer_languages]
+                raise EngineUnavailable(
+                    f"Windows OCR has no '{language}' language here (installed: {', '.join(available)}); "
+                    "add it under Settings > Time & language > Language, or change OCR_LOCAL_LANGUAGE")
+        else:
+            engine = OcrEngine.try_create_from_user_profile_languages()
+            if engine is None:
+                raise EngineUnavailable("Windows OCR has no language for this user's profile")
+        stream = InMemoryRandomAccessStream()
+        writer = DataWriter(stream)
+        writer.write_bytes(png)
+        await writer.store_async()
+        writer.detach_stream()
+        stream.seek(0)
+        bitmap = await (await BitmapDecoder.create_async(stream)).get_software_bitmap_async()
+        result = await engine.recognize_async(bitmap)
+        return "\n".join(line.text for line in result.lines)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, recognize()).result()
+
+
 def ocr_server_page(png, url, model, key):
     deepseek = "deepseek-ocr" in model.lower()
     payload = _post_json(f"{url}/chat/completions", {
@@ -201,24 +267,6 @@ def cloud_vision_page(png, url, model, key):
               for part in item.get("content") or []
               if part.get("type") in ("output_text", "text")]
     return ("".join(chunks) or _chat_text(payload)).strip()
-
-
-def azure_di_pages(data, endpoint, key):
-    """{page_index: text} from Azure Document Intelligence prebuilt-layout."""
-    from azure.ai.documentintelligence import DocumentIntelligenceClient
-    from azure.ai.documentintelligence.models import AnalyzeDocumentRequest
-    from azure.core.credentials import AzureKeyCredential
-
-    client = DocumentIntelligenceClient(endpoint, AzureKeyCredential(key))
-    result = client.begin_analyze_document(
-        "prebuilt-layout", AnalyzeDocumentRequest(bytes_source=data)).result()
-    out = {}
-    for page in getattr(result, "pages", None) or []:
-        lines = [(getattr(line, "content", None) or "").strip() for line in getattr(page, "lines", None) or []]
-        text = "\n".join(line for line in lines if line).strip()
-        if text:
-            out[(getattr(page, "page_number", 1) or 1) - 1] = text
-    return out
 
 
 # ------------------------------------------------------------ text layer ---
@@ -282,10 +330,14 @@ def page_count(data):
         raise PdfError("no PDF reader is installed", "pip install pypdfium2") from exc
 
 
-def render_png(doc, index, dpi):
+def render_png(doc, index, dpi, max_pixels=None):
     page = doc[index]
     try:
-        image = page.render(scale=dpi / 72).to_pil()
+        scale = dpi / 72
+        if max_pixels:
+            width, height = page.get_size()
+            scale = min(scale, max_pixels / max(width, height))
+        image = page.render(scale=scale).to_pil()
     finally:
         page.close()
     buffer = io.BytesIO()
@@ -327,21 +379,27 @@ def _text_layer(doc, data, indexes, tables):
 
 # ----------------------------------------------------------------- read ---
 
-def read_pages(data, pages=None, ocr="auto", tables=True, ocr_limit=OCR_PAGES_PER_CALL):
+def _ladder(mode, conf):
+    """The engines a mode tries, in order: (label, run(png_args), dpi, limit, max_pixels)."""
+    local = (LOCAL_OCR, conf["local"], local_ocr_page, LOCAL_DPI, LOCAL_PAGES_PER_CALL, LOCAL_MAX_PIXELS)
+    server = (OCR_SERVER, conf["server"], ocr_server_page, SERVER_DPI, OCR_PAGES_PER_CALL, None)
+    cloud = (CLOUD_VISION, conf["cloud"], cloud_vision_page, CLOUD_DPI, OCR_PAGES_PER_CALL, None)
+    order = {"auto": [local, server], "server": [server, local], "force": [server, local],
+             "cloud": [cloud, server, local], "never": []}[mode]
+    return [engine for engine in order if engine[1]]
+
+
+def read_pages(data, pages=None, ocr="auto", tables=True, ocr_limit=None):
     """Read the requested pages in the order described at the top.
 
-    ocr: "auto"  text layer, then your OCR server for pages without one
-         "never" text layer only
-         "force" your OCR server for every requested page
-         "cloud" as auto, then the cloud models for pages still empty
-
     Returns a dict: count, selected, texts {index: text}, sources {index:
-    label or ""}, notes [str], ocr_deferred [indexes beyond ocr_limit],
-    cloud_offer {pages, how} or None.
+    label or ""}, notes [str], ocr_deferred [indexes beyond the per-call cap],
+    ocr_upgrade {pages, how} or None, cloud_offer {pages, how} or None.
     """
-    if ocr not in ("auto", "never", "force", "cloud"):
-        raise PdfError(f"ocr must be auto, never, force or cloud, not {ocr!r}")
+    if ocr not in MODES:
+        raise PdfError(f"ocr must be one of {', '.join(MODES)}, not {ocr!r}")
     notes = []
+    conf = settings()
     doc = open_pdf(data)
     try:
         count = len(doc) if doc is not None else page_count(data)
@@ -353,79 +411,70 @@ def read_pages(data, pages=None, ocr="auto", tables=True, ocr_limit=OCR_PAGES_PE
             notes.append("Read with pdfminer.six: pypdfium2 is not installed, so scanned pages "
                          "cannot be rendered for OCR.")
         sources = {i: (layer if len(texts.get(i, "")) >= TEXT_MIN else "") for i in selected}
-        if ocr == "never":
-            need = []
-        elif ocr == "force":
-            need = list(selected)
-        else:
-            need = [i for i in selected if not sources[i]]
+        need = list(selected) if ocr == "force" else [i for i in selected if not sources[i]]
 
-        conf = settings()
-        deferred = []
-        if need and doc is not None:
-            todo, deferred = need[:ocr_limit], need[ocr_limit:]
-            engines = []
-            if conf["server"]:
-                engines.append((OCR_SERVER, conf["server"], ocr_server_page, SERVER_DPI))
-            elif ocr != "never":
-                notes.append("No OCR server is configured (OCR_URL is empty).")
-            done = set()
-            for label, config, call, dpi in engines:
-                _run_engine(label, config, call, dpi, doc, todo, done, texts, sources, notes,
+        deferred, unrenderable = [], []
+        if ocr == "cloud" and not conf["cloud"]:
+            notes.append("ocr='cloud' was asked for but no cloud model is configured (OCR_CLOUD_URL, "
+                         "OCR_CLOUD_MODEL and OCR_CLOUD_API_KEY or OCR_CLOUD_API_KEY_ENV).")
+        if ocr == "server" and not conf["server"]:
+            notes.append("ocr='server' was asked for but no OCR server is configured (OCR_URL is empty).")
+        engines = _ladder(ocr, conf)
+        if need and doc is None:
+            unrenderable = need
+        elif need and ocr != "never" and not engines:
+            notes.append("No OCR engine is available: no Windows OCR here and OCR_URL is empty.")
+        elif need:
+            done, attempted = set(), set()
+            for label, config, call, dpi, limit, max_pixels in engines:
+                todo = [i for i in need if i not in done][:ocr_limit or limit]
+                attempted.update(todo)
+                _run_engine(label, config, call, dpi, max_pixels, doc, todo, done, texts, sources, notes,
                             accept_short=(ocr == "force"))
-            if ocr == "cloud":
-                still = [i for i in todo if i not in done]
-                if still and conf["di"]:
-                    try:
-                        di = azure_di_pages(data, *conf["di"])
-                        for i in still:
-                            if len(di.get(i, "")) >= TEXT_MIN:
-                                texts[i], sources[i] = di[i], CLOUD_DI
-                                done.add(i)
-                    except ImportError:
-                        notes.append("Azure Document Intelligence is configured but its package "
-                                     "(azure-ai-documentintelligence) is not installed.")
-                    except Exception as exc:
-                        notes.append(f"Azure Document Intelligence did not answer ({type(exc).__name__}).")
-                still = [i for i in todo if i not in done]
-                if still and conf["cloud"]:
-                    _run_engine(CLOUD_VISION, conf["cloud"], cloud_vision_page, CLOUD_DPI, doc,
-                                still, done, texts, sources, notes, accept_short=False)
-                elif still and not conf["di"]:
-                    notes.append("ocr='cloud' was asked for but no cloud model is configured "
-                                 "(OCR_CLOUD_URL, OCR_CLOUD_MODEL and OCR_CLOUD_API_KEY or "
-                                 "OCR_CLOUD_API_KEY_ENV).")
-        unrenderable = need if doc is None else []
+            deferred = [i for i in need if i not in attempted]
     finally:
         if doc is not None:
             doc.close()
 
     empty = [i for i in selected if not sources[i] and i not in deferred and i not in unrenderable]
     # A short text layer (a cover page that says only "Annex") went to OCR as
-    # if it were a scan. If OCR found nothing better, keep what the page had
-    # rather than reporting it empty.
+    # if it were a scan. If OCR found nothing better, keep what the page had.
     for i in selected:
         if not sources[i] and texts.get(i, "").strip():
             sources[i] = layer
+
+    local_pages = [i for i in selected if sources[i] == LOCAL_OCR]
+    ocr_upgrade = None
+    if local_pages and conf["server"]:
+        ocr_upgrade = {
+            "pages": ranges(local_pages),
+            "how": "These pages were read by Windows OCR on this machine: fast, but tables come "
+                   "back as loose lines and digits can slip. If the text looks wrong, call again "
+                   "with ocr='server' and those pages; the organisation's OCR server reads them "
+                   "with table structure.",
+        }
     cloud_offer = None
-    if empty and ocr in ("auto", "force") and (conf["cloud"] or conf["di"]):
+    if empty and ocr in ("auto", "server", "force") and conf["cloud"]:
         cloud_offer = {
             "pages": ranges(empty),
             "how": "Ask the user. Only if they agree, call again with ocr='cloud': these pages "
                    "then go to the cloud model, outside the organisation.",
         }
     if deferred:
-        notes.append(f"OCR is capped at {ocr_limit} pages per call; page(s) {ranges(deferred)} "
-                     "were not read. Call again with those pages.")
-    return {"count": count, "selected": selected, "texts": texts, "sources": sources,
-            "notes": notes, "ocr_deferred": deferred, "cloud_offer": cloud_offer}
+        notes.append(f"OCR is capped per call; page(s) {ranges(deferred)} were not read. "
+                     "Call again with those pages.")
+    return {"count": count, "selected": selected, "texts": texts, "sources": sources, "notes": notes,
+            "ocr_deferred": deferred, "ocr_upgrade": ocr_upgrade, "cloud_offer": cloud_offer}
 
 
-def _run_engine(label, config, call, dpi, doc, indexes, done, texts, sources, notes, accept_short):
+def _run_engine(label, config, call, dpi, max_pixels, doc, indexes, done, texts, sources, notes, accept_short):
     failed = []
     for index in [i for i in indexes if i not in done]:
         try:
-            text = call(render_png(doc, index, dpi), *config)
+            text = call(render_png(doc, index, dpi, max_pixels), *config)
+        except EngineUnavailable as exc:
+            notes.append(f"{label}: {exc}.")
+            break
         except urllib.error.HTTPError as exc:
             failed.append(f"{index + 1} (HTTP {exc.code})")
             continue
@@ -434,7 +483,7 @@ def _run_engine(label, config, call, dpi, doc, indexes, done, texts, sources, no
             notes.append(f"{label} is unreachable ({type(exc).__name__}); "
                          "its remaining pages were skipped.")
             break
-        except ValueError as exc:
+        except Exception as exc:
             failed.append(f"{index + 1} ({type(exc).__name__})")
             continue
         if len(text.strip()) >= TEXT_MIN or (accept_short and text.strip()):

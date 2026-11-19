@@ -354,10 +354,11 @@ def _env(name, default=""):
 
 def _read_pdf(data, limit=_TEXT_LIMIT, ocr="auto"):
     """The first pages of a PDF, read by shared/pdfread.py -- the same module
-    and the same order as file-reader: text layer, then your OCR server, and
-    the cloud models only with ocr="cloud", after the user agreed.
+    and the same order as file-reader: text layer, then Windows OCR on this
+    machine (auto), your OCR server (ocr="server"), and the cloud model only
+    with ocr="cloud", after the user agreed.
 
-    Returns (text, text_source, note, cloud_offer).
+    Returns (text, text_source, note, cloud_offer, ocr_upgrade).
     """
     here = os.path.dirname(os.path.abspath(__file__))
     if here not in sys.path:  # imported from elsewhere, e.g. execute_code
@@ -372,7 +373,7 @@ def _read_pdf(data, limit=_TEXT_LIMIT, ocr="auto"):
         r = pdfread.read_pages(data, pages=list(range(min(count, _OCR_MAX_PAGES))),
                                ocr=ocr, ocr_limit=_OCR_MAX_PAGES)
     except pdfread.PdfError as exc:
-        return "", "", f"{exc}. {exc.hint}".strip(), None
+        return "", "", f"{exc}. {exc.hint}".strip(), None, None
     sources, parts = [], []
     for index in r["selected"]:
         label = r["sources"][index]
@@ -384,7 +385,7 @@ def _read_pdf(data, limit=_TEXT_LIMIT, ocr="auto"):
     text = "\n\n".join(parts).strip()[:limit]
     if not text and not notes and not r["cloud_offer"]:
         notes.append("The file is saved locally and no layer returned text.")
-    return text, "+".join(sources), " ".join(notes), r["cloud_offer"]
+    return text, "+".join(sources), " ".join(notes), r["cloud_offer"], r["ocr_upgrade"]
 
 
 def _compact_children(path, payload):
@@ -581,9 +582,9 @@ def _download_drive_content(path, timeout, ocr="auto"):
     text = ""
     source = ""
     ocr_note = ""
-    cloud_offer = None
+    cloud_offer = ocr_upgrade = None
     if kind == "pdf":
-        text, source, ocr_note, cloud_offer = _read_pdf(data, ocr=ocr)
+        text, source, ocr_note, cloud_offer, ocr_upgrade = _read_pdf(data, ocr=ocr)
     elif kind == "docx":
         try:
             text = _read_docx(data, _TEXT_LIMIT)
@@ -622,6 +623,8 @@ def _download_drive_content(path, timeout, ocr="auto"):
             "Do not open a SharePoint or download URL in the browser, "
             "and do not call /preview."
         )
+    if ocr_upgrade:
+        result["ocr_upgrade"] = ocr_upgrade
     if cloud_offer:
         result["cloud_ocr_needs_approval"] = cloud_offer
     return result
@@ -1066,8 +1069,8 @@ def build_parser():
     g.add_argument("path")
     g.add_argument("--param", action="append", help='repeatable: $top=5')
     g.add_argument("--all", action="store_true", help="follow nextLink (max 10 pages)")
-    g.add_argument("--ocr", default="auto", choices=["auto", "never", "cloud"],
-                   help="cloud: also Azure for scanned pages; only after the user agreed")
+    g.add_argument("--ocr", default="auto", choices=["auto", "server", "cloud", "never"],
+                   help="scanned pages: auto = Windows OCR here, server = OCR server, cloud = only after the user agreed")
     g.set_defaults(func=cmd_get)
 
     return p

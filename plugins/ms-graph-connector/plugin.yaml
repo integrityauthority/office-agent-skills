@@ -1,6 +1,6 @@
 manifest_version: 2
 name: ms-graph-connector
-version: 2.1.0
+version: 3.0.0
 description: >-
   Give Hermes read access to your own Microsoft 365: Outlook mail, OneDrive and
   SharePoint documents, Teams chats and your calendar, through the Microsoft
@@ -28,7 +28,13 @@ python_dependencies:
   - pdfplumber
   - pillow
   - pdfminer.six
-  - azure-ai-documentintelligence
+  # Windows OCR on this machine (pywinrt, MIT); Windows only.
+  - winrt-runtime>=3,<5; sys_platform == "win32"
+  - winrt-Windows.Media.Ocr; sys_platform == "win32"
+  - winrt-Windows.Graphics.Imaging; sys_platform == "win32"
+  - winrt-Windows.Storage.Streams; sys_platform == "win32"
+  - winrt-Windows.Globalization; sys_platform == "win32"
+  - winrt-Windows.Foundation; sys_platform == "win32"
 
 # Optional. Unset, the module borrows the public client id Microsoft publishes
 # for its Graph command line tools, which works but makes the tenant's sign-in
@@ -36,6 +42,8 @@ python_dependencies:
 # application and set this for anything beyond trying the plugin out.
 optional_env:
   - MSGRAPH_CLIENT_ID
+  - OCR_LOCAL
+  - OCR_LOCAL_LANGUAGE
   - OCR_URL
   - OCR_MODEL
   - OCR_API_KEY
@@ -43,5 +51,3 @@ optional_env:
   - OCR_CLOUD_MODEL
   - OCR_CLOUD_API_KEY
   - OCR_CLOUD_API_KEY_ENV
-  - AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT
-  - AZURE_DOCUMENT_INTELLIGENCE_KEY

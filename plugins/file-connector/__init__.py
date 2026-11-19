@@ -20,9 +20,11 @@ READ_SCHEMA = {
         "path": {"type": "string", "description": "Full path of the file."},
         "pages": {"type": "string",
                   "description": "PDF pages, 1-based, e.g. '1-3,7'. Default: all."},
-        "ocr": {"type": "string", "enum": ["auto", "never", "force", "cloud"],
-                "description": "auto: your OCR server (OCR_URL) for pages without text. cloud also "
-                               "sends pages still empty to the cloud model; only after the user agreed."},
+        "ocr": {"type": "string", "enum": ["auto", "server", "cloud", "force", "never"],
+                "description": "Scanned pages. auto: Windows OCR on this machine (fast). server: the "
+                               "organisation's OCR server, better for tables and numbers; use it when "
+                               "the auto text looks wrong. cloud: the cloud model, only after the user "
+                               "agreed. force: server even for pages with text. never: text layer only."},
         "attachment": {"type": "string",
                        "description": "For an .msg/.eml: read this attachment instead, by index "
                                       "('2'), nested index ('2/1') or file name."},
@@ -67,9 +69,9 @@ FIND_SCHEMA = {
                                                     "'kifejezés1|kifejezés2'."},
         "exact": {"type": "boolean", "description": "Case and accents must match."},
         "pages": {"type": "string", "description": "PDF pages to search, e.g. '1-20'. Default: all."},
-        "ocr": {"type": "string", "enum": ["auto", "never", "cloud"],
-                "description": "One file only. auto: scanned pages go through your OCR server first. "
-                               "cloud only after the user agreed."},
+        "ocr": {"type": "string", "enum": ["auto", "server", "cloud", "never"],
+                "description": "One file only, scanned pages. auto: Windows OCR here. server: the "
+                               "organisation's OCR server. cloud: only after the user agreed."},
         "attachment": {"type": "string", "description": "Search only this attachment of an .msg/.eml."},
         "recursive": {"type": "boolean", "description": "Folder: include subfolders."},
         "max_hits": {"type": "integer", "description": "Matches (or files) to return. Default 50."},

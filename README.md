@@ -13,7 +13,7 @@ them from a URL.
 |---|---|---|
 | [`office-live`](.agents/skills/office-live) | Reads and edits the Word, Excel or PowerPoint document the user has **open**, over COM. Word edits land as tracked revisions. | Windows, Office, `pywin32` |
 | [`m365-graph`](.agents/skills/m365-graph) | Searches the signed-in user's own Outlook mail, OneDrive and SharePoint documents, Teams chats and calendar, through the Microsoft Graph REST API. Read-only by default. | `msal`, a work or school account |
-| [`file-reader`](.agents/skills/file-reader) | Reads files on disk in one call: PDF (scanned pages through an OCR model you configure), Outlook `.msg` and `.eml` e-mails with their attachments, Word, Excel, PowerPoint, HTML, text. Read-only. | `pypdfium2`, `olefile`; any OS |
+| [`file-reader`](.agents/skills/file-reader) | Reads files on disk in one call: PDF (scanned pages through Windows OCR, or an OCR server you configure), Outlook `.msg` and `.eml` e-mails with their attachments, Word, Excel, PowerPoint, HTML, text. Read-only. | `pypdfium2`, `olefile`; any OS |
 
 The first two are Windows-and-Microsoft specific, which is why they live here
 rather than upstream in any one agent's repository.
@@ -244,30 +244,41 @@ is reachable with `apb pull` and a key, and serves nothing publicly.
 ## Configuration
 
 Everything is optional and read from environment variables; Hermes reads them
-from its `.env`. Nothing in this repository names a server or a deployment,
-so a skill with no configuration still works and simply leaves scanned pages
-empty.
+from its `.env`. Nothing in this repository names a server or a deployment.
+With no configuration at all, a scanned page is still read on Windows, by
+Windows' own OCR on the machine.
 
 | Variable | Used by | Meaning |
 |---|---|---|
-| `OCR_URL` | file-reader, m365-graph | Your own OpenAI-compatible server (`/chat/completions` with an image). Scanned PDF pages always go here first. |
+| `OCR_LOCAL_LANGUAGE` | file-reader, m365-graph | Language for Windows OCR, such as `hu` or `en-US`. Default: the user's Windows languages. It must be installed (Settings → Time & language → Language). |
+| `OCR_LOCAL` | file-reader, m365-graph | `off` turns Windows OCR off. |
+| `OCR_URL` | file-reader, m365-graph | Your own OpenAI-compatible OCR server (`/chat/completions` with an image), for when Windows OCR is not good enough. |
 | `OCR_MODEL` | file-reader, m365-graph | Model on that server. Default `deepseek-ai/DeepSeek-OCR-2`; any other vision model gets a plain transcription prompt. |
 | `OCR_API_KEY` | file-reader, m365-graph | Bearer token for that server, if it wants one. |
 | `OCR_CLOUD_URL` | file-reader, m365-graph | A cloud vision model behind the OpenAI Responses API (`/responses`), Azure OpenAI included. |
 | `OCR_CLOUD_MODEL` | file-reader, m365-graph | Model or deployment name there. |
 | `OCR_CLOUD_API_KEY` | file-reader, m365-graph | Its key. Sent as `api-key` to `*.azure.com`, as a bearer token elsewhere. |
 | `OCR_CLOUD_API_KEY_ENV` | file-reader, m365-graph | Instead of the key: the name of the variable that already holds it, so a secret your agent has anyway is not copied. |
-| `AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT`, `AZURE_DOCUMENT_INTELLIGENCE_KEY` | m365-graph | Optional Azure layout model, tried before the cloud vision model. |
 | `MSGRAPH_CLIENT_ID`, `MSGRAPH_TENANT_ID` | m365-graph | Your own Entra ID application and tenant; see below. |
 
-The OCR order is the same in both skills:
+The OCR order is the same in both skills, cheapest and most private first:
 
-1. the text layer, on this machine;
-2. `OCR_URL`, for pages without one;
-3. nothing more on its own. If pages are still empty and a cloud model is
-   configured, the answer carries `cloud_ocr_needs_approval` with the page
-   numbers. The agent asks the user, and only on a yes calls again with
-   `ocr="cloud"`; the OCR server is tried first even then.
+1. the text layer, on this machine, always;
+2. a scanned page: **Windows OCR on this machine** (`ocr="auto"`, the
+   default; well under a second a page, nothing leaves the computer). Where
+   there is no Windows OCR, your OCR server instead;
+3. **your OCR server** when the agent or the user finds that text not good
+   enough: `ocr="server"`. It keeps table structure and reads numbers more
+   reliably. The answer says which pages Windows read (`ocr_upgrade`), so the
+   agent knows when to ask for it;
+4. **a cloud model only on a yes**: when pages are still empty, the answer
+   carries `cloud_ocr_needs_approval`; the agent asks the user and only then
+   calls again with `ocr="cloud"`.
+
+Windows OCR is reached through [pywinrt](https://github.com/pywinrt/pywinrt)
+(MIT) in-process, with no helper program started. On another operating
+system step 2 is skipped. There is no Azure Document Intelligence step: it
+needed its own SDK and sent the whole PDF, not only the empty pages.
 
 ## What they do and do not do
 
@@ -285,9 +296,10 @@ neither skill reports telemetry anywhere, and no credential is stored by them
 is sent to a model by the skills themselves — whatever the agent reads enters
 its context, and where that goes is decided by the model you configured. The
 one exception is OCR, described under [Configuration](#configuration): a
-scanned page goes to your own OCR server if you set one, and to a cloud model
-only on a second, explicit call the user has agreed to. A page with a text
-layer is always read locally.
+scanned page is read by Windows OCR on the machine, goes to your own OCR
+server only when the agent asks for better text, and to a cloud model only on
+a second, explicit call the user has agreed to. A page with a text layer is
+always read locally.
 
 `office.py --warm` keeps a background process holding the COM objects between
 calls, because cold-starting COM costs a third of a second each time. It binds
@@ -356,7 +368,8 @@ Nothing third-party is bundled here. At runtime the skills import
 [olefile](https://github.com/decalage2/olefile) (BSD-2),
 [openpyxl](https://foss.heptapod.net/openpyxl/openpyxl) (MIT),
 [python-docx](https://github.com/python-openxml/python-docx) (MIT) and
-[Pillow](https://github.com/python-pillow/Pillow) (MIT-CMU), and optionally
+[Pillow](https://github.com/python-pillow/Pillow) (MIT-CMU),
+[pywinrt](https://github.com/pywinrt/pywinrt) (MIT, Windows only), and optionally
 the [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk) (MIT),
 each installed and licensed on its own terms.
 

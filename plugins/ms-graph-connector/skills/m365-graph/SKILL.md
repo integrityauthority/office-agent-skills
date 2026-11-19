@@ -4,7 +4,7 @@ description: Search and read the organisation's Microsoft 365 content — Outloo
 license: MIT
 compatibility: Windows (the token cache uses DPAPI); Python with msal and requests; a Microsoft 365 work or school account. OCR settings are in the repository README.
 metadata:
-  version: "2.0.1"
+  version: "3.0.0"
   author: Integritás Hatóság
 ---
 
@@ -24,13 +24,14 @@ the `.docx` or `.xlsx` copy.
 
 A PDF is read in the same order as file-reader does it. A page with a text
 layer is read locally by pypdfium2 (`text_source` contains `text-layer`) and
-never leaves the machine. A scanned page always goes to the organisation's
-own OCR server first (`ocr-server`). Nothing goes to a cloud model on its
-own: if pages are still empty, the answer has `cloud_ocr_needs_approval`. Ask
-the user; only if they agree, call `m365_get` again with the same path and
-`ocr="cloud"`. Then Azure Document Intelligence
-(`azure-document-intelligence`, when configured) and the cloud vision model
-(`cloud-vision`) read the pages still empty. Do not open the SharePoint link
+never leaves the machine. A scanned page is read by Windows OCR on this
+machine (`windows-ocr`), fast and private. If that text looks wrong — tables
+come back as loose lines, digits can slip — call `m365_get` again with the
+same path and `ocr="server"`: the organisation's OCR server (`ocr-server`)
+reads it with table structure; `ocr_upgrade` in the answer lists the pages.
+Nothing goes to a cloud model on its own: if pages are still empty, the
+answer has `cloud_ocr_needs_approval`. Ask the user; only if they agree, call
+again with `ocr="cloud"` (`cloud-vision`). Do not open the SharePoint link
 in the browser, and do not call `/preview`: the browser viewer does not expose the text layer, and
 `/preview` returns 403.
 
@@ -43,17 +44,16 @@ already see. There is no service account and no tenant-wide access — if they
 cannot open a site, neither can you.
 
 Runs on the interpreter Hermes already uses; `msal`, `requests`, `python-docx`,
-`openpyxl`, `pypdfium2`, `pdfplumber`, `pdfminer.six` and
-`azure-ai-documentintelligence` are installed there. python-docx reads a
+`openpyxl`, `pypdfium2`, `pdfplumber`, `pdfminer.six` and, on Windows,
+`pywinrt` for Windows OCR are installed there. python-docx reads a
 `.docx`, openpyxl reads a `.xlsx`. pypdfium2 reads a PDF text layer and
 renders a scanned page, pdfplumber adds any table, both locally. (PyMuPDF
 is not used: it is AGPL-3.0.) The OCR settings are the same environment
-variables file-reader uses: `OCR_URL` and `OCR_MODEL` (default
-`deepseek-ai/DeepSeek-OCR-2`) for your own server; `OCR_CLOUD_URL`,
-`OCR_CLOUD_MODEL` and `OCR_CLOUD_API_KEY` (or `OCR_CLOUD_API_KEY_ENV`) for
-the cloud model; `AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT` and `_KEY` for the
-optional layout model. Both cloud steps run only with `ocr="cloud"`. The
-Graph token is not sent with the file or the image.
+variables file-reader uses: `OCR_LOCAL_LANGUAGE` for Windows OCR;
+`OCR_URL` and `OCR_MODEL` (default `deepseek-ai/DeepSeek-OCR-2`) for your
+own server; `OCR_CLOUD_URL`, `OCR_CLOUD_MODEL` and `OCR_CLOUD_API_KEY` (or
+`OCR_CLOUD_API_KEY_ENV`) for the cloud model, used only with `ocr="cloud"`.
+The Graph token is not sent with the file or the image.
 
 Shorthand below: `mg` = `%LOCALAPPDATA%\hermes\hermes-agent\venv\Scripts\python.exe ${HERMES_SKILL_DIR}/scripts/microsoft_graph.py`
 
@@ -160,8 +160,8 @@ mg get /me/drive/items/<id>/content
 
 The answer is JSON with `saved_to`, `text` and `text_source`. Summarize
 `text`. For a workbook, keep the sheet names. `text_source` is `docx` or
-`xlsx`, or for a PDF the layers joined with `+`: `text-layer`, `ocr-server`,
-`pdfminer`, `azure-document-intelligence`, `cloud-vision`. Do not call `/preview` and do not
+`xlsx`, or for a PDF the layers joined with `+`: `text-layer`, `pdfminer`,
+`windows-ocr`, `ocr-server`, `cloud-vision`. Do not call `/preview` and do not
 open `@microsoft.graph.downloadUrl` or the SharePoint `webUrl` in a browser:
 that session is not signed in, and the plugin would also misread the file
 bytes as JSON. `/content` follows the redirect without the Graph token,

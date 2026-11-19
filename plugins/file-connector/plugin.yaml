@@ -1,6 +1,6 @@
 manifest_version: 2
 name: file-connector
-version: 1.3.0
+version: 1.4.0
 description: >-
   Let Hermes read files from disk in one call: PDF (scanned pages through the
   organisation's OCR model), Outlook .msg and .eml e-mails with their
@@ -17,8 +17,9 @@ provides_tools:
   - file_render
 
 # All permissive licences: pypdfium2 (Apache-2.0/BSD-3), pdfminer.six (MIT),
-# pdfplumber (MIT, tables), olefile (BSD-2), openpyxl (MIT), pillow (HPND). Word, PowerPoint, .eml,
-# HTML and text are read with the standard library.
+# pdfplumber (MIT, tables), olefile (BSD-2), openpyxl (MIT), pillow (HPND),
+# pywinrt (MIT). Word, PowerPoint, .eml, HTML and text are read with the
+# standard library.
 python_dependencies:
   - pypdfium2
   - pdfminer.six
@@ -26,10 +27,19 @@ python_dependencies:
   - olefile
   - openpyxl
   - pillow
+  # Windows OCR on this machine (pywinrt, MIT); Windows only.
+  - winrt-runtime>=3,<5; sys_platform == "win32"
+  - winrt-Windows.Media.Ocr; sys_platform == "win32"
+  - winrt-Windows.Graphics.Imaging; sys_platform == "win32"
+  - winrt-Windows.Storage.Streams; sys_platform == "win32"
+  - winrt-Windows.Globalization; sys_platform == "win32"
+  - winrt-Windows.Foundation; sys_platform == "win32"
 
 # OCR, shared with the other plugins in this repository (see the README,
-# "Configuration"). All optional: without them scanned PDF pages stay empty.
+# "Configuration"). All optional: Windows OCR needs none of them.
 optional_env:
+  - OCR_LOCAL
+  - OCR_LOCAL_LANGUAGE
   - OCR_URL
   - OCR_MODEL
   - OCR_API_KEY

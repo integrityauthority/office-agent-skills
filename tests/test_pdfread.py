@@ -73,17 +73,18 @@ def test_cloud_is_offered_not_used(fake_ocr, monkeypatch):
     assert any("unreachable" in n for n in r["notes"])
 
 
-def test_cloud_after_approval_still_tries_the_server_first(fake_ocr, monkeypatch):
+def test_cloud_after_approval_goes_to_the_cloud(fake_ocr, monkeypatch):
+    """ocr='cloud' is the user's answer to "the local text is not good enough"."""
     monkeypatch.setenv("OCR_URL", fake_ocr.url)
     monkeypatch.setenv("OCR_CLOUD_URL", fake_ocr.url)
     monkeypatch.setenv("OCR_CLOUD_MODEL", "vision")
     monkeypatch.setenv("OCR_CLOUD_API_KEY", "k")
     r = pdfread.read_pages(TWO_SCANS, ocr="cloud")
-    assert set(r["sources"].values()) == {"text-layer", "ocr-server"}
-    assert fake_ocr.calls("/responses") == []    # the server read them all
+    assert set(r["sources"].values()) == {"text-layer", "cloud-vision"}
+    assert fake_ocr.calls("/chat/completions") == []
 
 
-def test_cloud_reads_what_the_server_could_not(fake_ocr, monkeypatch):
+def test_cloud_with_a_key_held_elsewhere(fake_ocr, monkeypatch):
     monkeypatch.setenv("OCR_URL", UNREACHABLE)
     monkeypatch.setenv("OCR_CLOUD_URL", fake_ocr.url)
     monkeypatch.setenv("OCR_CLOUD_MODEL", "vision")
@@ -112,7 +113,7 @@ def test_ocr_is_capped_per_call(fake_ocr, monkeypatch):
     r = pdfread.read_pages(build_pdf([None, None, None]), ocr_limit=2)
     assert r["ocr_deferred"] == [2]
     assert r["sources"][2] == ""
-    assert any("capped at 2" in n for n in r["notes"])
+    assert any("capped per call" in n and "3" in n for n in r["notes"])
 
 
 def test_auth_headers():
@@ -142,11 +143,14 @@ def test_errors():
         pdfread.open_pdf(b"%PDF-1.4 this is not really a pdf")
 
 
-@pytest.mark.parametrize("env", ["server", "server-down-cloud", "nothing"])
-def test_both_skills_read_the_same_way(fake_ocr, monkeypatch, env):
+@pytest.mark.parametrize("env", ["server", "server-down-cloud", "nothing", "windows+server"])
+def test_both_skills_read_the_same_way(fake_ocr, monkeypatch, env, request):
     """file-reader and m365-graph must give the same sources and the same offer."""
     import files
     if env == "server":
+        monkeypatch.setenv("OCR_URL", fake_ocr.url)
+    elif env == "windows+server":
+        request.getfixturevalue("fake_local_ocr")
         monkeypatch.setenv("OCR_URL", fake_ocr.url)
     elif env == "server-down-cloud":
         monkeypatch.setenv("OCR_URL", UNREACHABLE)
@@ -154,8 +158,9 @@ def test_both_skills_read_the_same_way(fake_ocr, monkeypatch, env):
         monkeypatch.setenv("OCR_CLOUD_MODEL", "vision")
         monkeypatch.setenv("OCR_CLOUD_API_KEY", "k")
     via_files = files.read_pdf(TWO_SCANS)
-    text, source, _note, offer = microsoft_graph._read_pdf(TWO_SCANS)
+    text, source, _note, offer, upgrade = microsoft_graph._read_pdf(TWO_SCANS)
     used = {s for s in via_files["page_sources"] if s != "no-text"}
     assert set(source.split("+")) - {""} == used
     assert (offer or {}).get("pages") == (via_files.get("cloud_ocr_needs_approval") or {}).get("pages")
     assert ("--- page 1 ---" in text) == ("--- page 1 ---" in via_files["text"])
+    assert (upgrade or {}).get("pages") == (via_files.get("ocr_upgrade") or {}).get("pages")
