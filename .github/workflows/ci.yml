@@ -16,6 +16,10 @@ jobs:
         with:
           # The whole history, so a pull request's own commits can be checked.
           fetch-depth: 0
+          # The pull request's own head, not the merge commit GitHub makes for
+          # it: that commit's message ("Merge <sha> into <sha>") would be read
+          # as two keys by the public-safety check below.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
