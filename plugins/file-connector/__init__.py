@@ -17,9 +17,9 @@ _SCRIPTS = _SKILL_DIR / "scripts"
 READ_SCHEMA = {
     "type": "object",
     "properties": {
-        "path": {"type": "string", "description": "Full path of the file."},
+        "path": {"type": "string", "description": "Full path of the file (PDF, image, .msg, .eml, Office, .zip, text)."},
         "pages": {"type": "string",
-                  "description": "PDF pages, 1-based, e.g. '1-3,7'. Default: all."},
+                  "description": "PDF or multi-page TIFF pages, 1-based, e.g. '1-3,7'. Default: all."},
         "ocr": {"type": "string", "enum": ["auto", "server", "cloud", "force", "never"],
                 "description": "Scanned pages. auto: Windows OCR on this machine (fast). server: the "
                                "organisation's OCR server, better for tables and numbers; use it when "
@@ -170,8 +170,8 @@ def register(ctx):
         "file_read", "files", READ_SCHEMA, _read,
         description=(
             # The tool-search catalogue shows the first sentence, cut at 60 characters.
-            "Read a PDF, e-mail (.msg/.eml) or Office file as text. "
-            "Scanned pages go through OCR; an e-mail comes back as headers, body and an "
+            "Read a PDF, image, e-mail or Office file as text. "
+            "Scanned pages and pictures (PNG, JPEG, TIFF) go through OCR; an e-mail comes back as headers, body and an "
             "attachment list, and attachment='2' reads one attachment in place -- or one "
             "member of a .zip. Word comments, tracked changes and ticked boxes, PDF signers "
             "and form fields come along; labels= picks out values. Read-only."

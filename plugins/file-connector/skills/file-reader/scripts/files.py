@@ -53,6 +53,9 @@ XLSX_MAX_COLS = 30
 TEXT_EXTENSIONS = {".txt", ".md", ".csv", ".tsv", ".json", ".xml", ".log", ".ini",
                    ".yaml", ".yml", ".py", ".ps1", ".sql", ".rtf"}
 HTML_EXTENSIONS = {".html", ".htm", ".xhtml"}
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".gif"}
+IMAGE_DPI = 300                 # when the image does not say; rendering at LOCAL_DPI keeps its pixels
+IMAGE_MAX_FRAMES = 50
 
 
 class FileError(Exception):
@@ -188,6 +191,9 @@ def detect_kind(data: bytes, name: str = "") -> str:
         if any(n.startswith("ppt/slides/") for n in names):
             return "pptx"
         return "zip"
+    if (data.startswith((b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff", b"II*\x00", b"MM\x00*"))
+            or (ext in IMAGE_EXTENSIONS and data.startswith((b"BM", b"GIF8")))):
+        return "image"
     if ext == ".eml":
         return "eml"
     if ext in HTML_EXTENSIONS:
@@ -249,6 +255,39 @@ def read_pdf(data, pages=None, ocr="auto", max_chars=TEXT_LIMIT):
                           f"pages='{pdfread.ranges(rest)}', or search with file_find.")
     if r["notes"]:
         result["notes"] = r["notes"]
+    return result
+
+
+def image_as_pdf(data):
+    """A picture (a multi-page TIFF too) as a PDF of image pages, at the
+    image's own resolution, so OCR goes through the same reader as a scan."""
+    try:
+        from PIL import Image, ImageSequence
+    except ImportError as exc:
+        raise FileError("reading an image needs Pillow", "pip install pillow") from exc
+    with Image.open(io.BytesIO(data)) as image:
+        dpi = image.info.get("dpi") or (IMAGE_DPI, IMAGE_DPI)
+        try:
+            resolution = float(dpi[0]) if float(dpi[0]) >= 72 else IMAGE_DPI
+        except (TypeError, ValueError, IndexError):
+            resolution = IMAGE_DPI
+        frames = [frame.convert("RGB") for _, frame in zip(range(IMAGE_MAX_FRAMES), ImageSequence.Iterator(image))]
+    buffer = io.BytesIO()
+    frames[0].save(buffer, format="PDF", resolution=resolution, save_all=True, append_images=frames[1:])
+    return buffer.getvalue()
+
+
+def read_image(data, pages=None, ocr="auto", max_chars=TEXT_LIMIT):
+    """OCR a picture: a scanned page, a photo of a form, a screenshot. The
+    same order as a scanned PDF page (Windows OCR here, then the OCR server,
+    the cloud only with approval); a multi-page TIFF reads page by page."""
+    if ocr == "never":
+        return {"kind": "image", "text": "", "truncated": False,
+                "notes": ["An image has no text layer; read it with ocr='auto' or look at it."]}
+    result = read_pdf(image_as_pdf(data), pages=pages, ocr=ocr, max_chars=max_chars)
+    result["kind"] = "image"
+    for key in ("signed", "signers", "form_fields"):
+        result.pop(key, None)
     return result
 
 
@@ -556,6 +595,8 @@ def read_xlsx(data, max_chars=TEXT_LIMIT):
 def _read_bytes(data, name, kind, pages, ocr, max_chars):
     if kind == "pdf":
         return read_pdf(data, pages=pages, ocr=ocr, max_chars=max_chars)
+    if kind == "image":
+        return read_image(data, pages=pages, ocr=ocr, max_chars=max_chars)
     if kind == "msg":
         return _email_result(msgfile.open_msg(data).summary(), "msg", max_chars)
     if kind == "msg-object":
@@ -587,7 +628,7 @@ def _read_bytes(data, name, kind, pages, ocr, max_chars):
                 "next": "Read a member in place with attachment='<index or name>', search inside with "
                         "file_find, or extract with file_unpack."}
     raise FileError(f"{name} is not a format this reader knows ({kind})",
-                    "PDF, .msg, .eml, .docx, .xlsx, .pptx, .zip, HTML and text are supported.")
+                    "PDF, images, .msg, .eml, .docx, .xlsx, .pptx, .zip, HTML and text are supported.")
 
 
 def extract_labels(text, labels):
@@ -707,6 +748,11 @@ def _snippet(text, start, end, context=FIND_CONTEXT):
 
 def _search_units(data, name, kind, pages, ocr, meta, prefix="", depth=0):
     """Yield (where, text, line_numbers) pieces of one file to search."""
+    if kind == "image":
+        if ocr == "never":
+            meta["unsearched"].append(f"{prefix or name + ': '}image (no OCR asked)")
+            return
+        data, kind = image_as_pdf(data), "pdf"
     if kind == "pdf":
         r = pdfread.read_pages(data, pages=pages, ocr=ocr, tables=False)
         meta["notes"] += [prefix + n for n in r["notes"]]

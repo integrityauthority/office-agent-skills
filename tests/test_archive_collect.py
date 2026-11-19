@@ -259,3 +259,44 @@ def test_collect_writes_csv_when_the_table_is_long(tmp_path, monkeypatch):
     r = ok(files.run(files.collect_files, str(d)))
     assert r["count"] == 3 and len(r["rows"]) == 2 and r["csv"].endswith("sok.csv")
     assert any("CSV only" in note for note in r["notes"])
+
+
+# ---------------------------------------------------------------- images ---
+
+def make_image(fmt="PNG", frames=1):
+    Image = pytest.importorskip("PIL.Image")
+    pictures = [Image.new("RGB", (400, 200), (255, 255, 255)) for _ in range(frames)]
+    buf = io.BytesIO()
+    pictures[0].save(buf, format=fmt, save_all=frames > 1, append_images=pictures[1:], dpi=(300, 300))
+    return buf.getvalue()
+
+
+def test_an_image_is_read_with_ocr(tmp_path, fake_local_ocr):
+    p = tmp_path / "kepernyokep.png"
+    p.write_bytes(make_image())
+    assert files.detect_kind(p.read_bytes(), p.name) == "image"
+    r = ok(files.run(files.read_file, str(p)))
+    assert r["kind"] == "image" and r["page_sources"] == {"windows-ocr": "1"}
+    assert fake_local_ocr.reply in r["text"]
+
+
+def test_a_multipage_tiff_reads_page_by_page(tmp_path, fake_local_ocr):
+    p = tmp_path / "fax.tif"
+    p.write_bytes(make_image("TIFF", frames=3))
+    r = ok(files.run(files.read_file, str(p), pages="2-3"))
+    assert r["page_count"] == 3 and r["pages_read"] == "2-3" and len(fake_local_ocr.calls) == 2
+
+
+def test_an_image_without_ocr_says_so(tmp_path):
+    p = tmp_path / "foto.jpg"
+    p.write_bytes(make_image("JPEG"))
+    r = ok(files.run(files.read_file, str(p), ocr="never"))
+    assert r["kind"] == "image" and r["text"] == "" and r["notes"]
+
+
+def test_find_in_an_image(tmp_path, fake_local_ocr):
+    fake_local_ocr.reply = "Iktatószám: 77/2026, határidő december 1."
+    p = tmp_path / "scan.png"
+    p.write_bytes(make_image())
+    r = ok(files.run(files.find_in_files, str(p), "hatarido"))
+    assert r["hit_count"] == 1 and r["hits"][0]["where"] == "page 1"

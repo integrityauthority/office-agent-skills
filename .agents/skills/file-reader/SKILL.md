@@ -1,10 +1,10 @@
 ---
 name: file-reader
-description: Read files on disk as text in one call — PDF (scanned pages go through OCR), Outlook .msg and .eml e-mails with their attachments, Word .docx, Excel .xlsx, PowerPoint .pptx, HTML and plain text. Search inside a document, an e-mail with its attachments, or a whole folder, with page-level locations. Read an attachment or a .zip member without saving it, save attachments, unpack a .zip safely, tabulate a folder or .zip of letters and documents (sender, date, signers, labelled values), or render PDF pages as images to look at. Use when the user points at a file path or an e-mail file ("olvasd el ezt a PDF-et", "mi van ebben a levélben", "nézd meg a mellékletet", "szkennelt PDF"). Do NOT use for a document the user has OPEN in Word, Excel or PowerPoint, or for mail in the running Outlook — that is office-live. Do NOT use for OneDrive or SharePoint files — that is m365-graph.
+description: Read files on disk as text in one call — PDF and images (scanned pages, photos and screenshots go through OCR), Outlook .msg and .eml e-mails with their attachments, Word .docx, Excel .xlsx, PowerPoint .pptx, HTML and plain text. Search inside a document, an e-mail with its attachments, or a whole folder, with page-level locations. Read an attachment or a .zip member without saving it, save attachments, unpack a .zip safely, tabulate a folder or .zip of letters and documents (sender, date, signers, labelled values), or render PDF pages as images to look at. Use when the user points at a file path or an e-mail file ("olvasd el ezt a PDF-et", "mi van ebben a levélben", "nézd meg a mellékletet", "szkennelt PDF"). Do NOT use for a document the user has OPEN in Word, Excel or PowerPoint, or for mail in the running Outlook — that is office-live. Do NOT use for OneDrive or SharePoint files — that is m365-graph.
 license: MIT
 compatibility: Any OS with Python 3.10+. pypdfium2, pdfplumber, pdfminer.six, olefile, openpyxl, pillow and pypdf give full coverage; OCR settings are in the repository README.
 metadata:
-  version: "1.4.0"
+  version: "1.5.0"
   author: Integritás Hatóság
 ---
 
@@ -22,6 +22,7 @@ of them, not into a closed file.
 |---|---|
 | a file's text | `file_read(path)` |
 | some PDF pages | `file_read(path, pages="3-5,9")` |
+| a scanned image, photo or screenshot | `file_read(path)` on the .png / .jpg / .tif: OCR, as for a scanned page |
 | where something is in a long document | `file_find(path, "words")` |
 | which files in a folder mention it | `file_find(folder, "words")` (`recursive=true` for subfolders) |
 | an e-mail: headers, body, attachment list | `file_read(path)` on the .msg / .eml |
@@ -44,6 +45,8 @@ follow the hint instead of retrying the same call.
   `--- page N ---` line before each page. Quote page numbers from those lines.
   `page_sources` says how each page was read: `text-layer`, `windows-ocr`,
   `ocr-server`, `cloud-vision` or `no-text`.
+- **Image**: like a PDF, `kind: "image"`; each frame of a multi-page TIFF
+  is a page. The text is an OCR reading: check digits and dates.
 - **E-mail**: `subject`, `from`, `to`, `cc`, `date`, `text` (the body) and
   `attachments`, each with `index`, `name`, `mime`, `size`, `inline`.
   `inline` items are pictures in the body, usually signature logos; leave them
