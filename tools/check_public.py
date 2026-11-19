@@ -149,8 +149,8 @@ def scan_text(label: str, text: str) -> list[str]:
 def scan_files() -> list[str]:
     found = []
     for rel in tracked_files():
-        if rel in SELF:
-            continue
+        if rel in SELF or not (ROOT / rel).is_file():
+            continue  # this file, or one deleted but not yet staged
         data = (ROOT / rel).read_bytes()
         if b"\0" in data[:8192]:
             continue  # binary

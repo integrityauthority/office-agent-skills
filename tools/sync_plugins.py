@@ -1,83 +1,113 @@
 #!/usr/bin/env python3
-"""Copy each skill into the Hermes plugin that wraps it, and fail if they drift.
+"""Build every plugin directory from its skill, for every platform, and fail
+if anything drifts.
 
-There is one source of truth for every line of Python here, and it is
-``.agents/skills/<skill>/``. The plugins under ``plugins/`` are adapters: a
-manifest, a ``register()`` that exposes the functions as Hermes tools, and a
-*copy* of the skill's files.
+There is one source of truth for every line here: ``.agents/skills/<skill>/``
+(and ``shared/`` for code more than one skill needs). Each directory under
+``plugins/`` is the same skill packaged three ways at once:
 
-The copy is not a design choice, it is what ``hermes plugins install`` needs.
-It installs a single directory -- the repository's own subdirectory named in
-the catalogue entry -- and nothing outside that directory comes with it. A
-plugin that reached up into ``.agents/`` would validate here and be broken for
-everyone who installed it.
+    plugins/<plugin>/
+      plugin.yaml, __init__.py      Hermes Agent (hand-written: the tool adapter)
+      plugin.json                   Agent Plugins 1.0 (Codex, Cursor, Copilot, VS Code, ...)
+      .claude-plugin/plugin.json    Claude Code
+      skills/<skill>/               the skill itself: SKILL.md and scripts/, copied
 
-So the copy exists, and this script makes it a derived artefact rather than a
-second original:
+and ``.claude-plugin/marketplace.json`` at the repository root lists them for
+Claude Code. Hermes reads plugin.yaml and ignores plugin.json beside it, so
+the three never compete.
 
-    py tools/sync_plugins.py            refresh the copies
-    py tools/sync_plugins.py --check    fail if they differ (CI)
+The copies are not a design choice, they are what installers need: each one
+takes a single directory and nothing outside it. This script makes them
+derived artefacts rather than second originals:
 
-Edit the skill (or the module under shared/). Run the sync. Commit all of it.
+    py tools/sync_plugins.py            refresh copies and manifests
+    py tools/sync_plugins.py --check    fail if any differ (CI)
+
+Edit the skill, shared/ or plugin.yaml. Run the sync. Commit all of it.
 """
 from __future__ import annotations
 
 import argparse
 import filecmp
+import json
+import re
 import shutil
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# plugin directory -> the skill it wraps. A plugin may ship the skill document
-# too; the agent does not discover a plugin-registered skill from
-# `<available_skills>`, but it is useful reference material once the tools have
-# been reached for.
-PAIRS = {
-    "office-connector": "office-live",
-    "ms-graph-connector": "m365-graph",
-    "file-connector": "file-reader",
+REPOSITORY = "https://github.com/integrityauthority/office-agent-skills"
+AUTHOR = {"name": "Integritás Hatóság", "url": "https://github.com/integrityauthority"}
+LICENSE = "MIT"
+AGENT_PLUGINS_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"
+MARKETPLACE = {
+    "name": "office-agent-skills",
+    "description": "Agent skills for office work: read PDF, e-mail and Office files, work live in "
+                   "Word, Excel, PowerPoint and Outlook, search your own Microsoft 365.",
 }
 
-# What travels. Anything else in a skill directory stays there.
+# plugin directory -> the skill it carries, and discovery keywords.
+PLUGINS = {
+    "office-connector": ("office-live", ["office", "word", "excel", "powerpoint", "outlook", "windows", "com"]),
+    "ms-graph-connector": ("m365-graph", ["microsoft-365", "graph", "onedrive", "sharepoint", "outlook", "teams"]),
+    "file-connector": ("file-reader", ["pdf", "ocr", "msg", "eml", "email", "docx", "xlsx", "search"]),
+}
+
+# What travels from a skill directory. Anything else stays there.
 COPIED = ("SKILL.md", "scripts")
 
 # Modules more than one skill needs. A skill has to stay self-contained -- it
 # is installed as one directory -- so each gets a copy in its scripts/, made
-# here from the one source under shared/. Step one of every run, so the
-# plugin copies below then pick the fresh file up like any other script.
+# from the one source under shared/. Step one of every run, so the plugin
+# copies then pick the fresh file up like any other script.
 SHARED = {
     "shared/pdfread.py": ("file-reader", "m365-graph"),
 }
 
 
-def sync_shared(check: bool) -> int:
-    problems = 0
-    for source_rel, skills in SHARED.items():
-        source = ROOT / source_rel
-        for skill in skills:
-            destination = ROOT / ".agents" / "skills" / skill / "scripts" / source.name
-            if destination.is_file() and filecmp.cmp(source, destination, shallow=False):
-                continue
-            if check:
-                print(f"     {skill}/scripts/{source.name} differs from {source_rel}")
-                problems += 1
-                continue
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, destination)
-            print(f"     copied {source_rel} -> {skill}/scripts/{source.name}")
-    if problems:
-        print("FAIL shared modules")
-    else:
-        print(f"ok   shared modules ({sum(len(v) for v in SHARED.values())} copies)")
-    return problems
+class Drift:
+    def __init__(self, check: bool):
+        self.check = check
+        self.problems = 0
+
+    def file(self, source: Path, destination: Path, label: str):
+        if destination.is_file() and filecmp.cmp(source, destination, shallow=False):
+            return
+        if self.check:
+            print(f"     {label} differs from {source.relative_to(ROOT).as_posix()}")
+            self.problems += 1
+            return
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+        print(f"     copied {label}")
+
+    def text(self, content: str, destination: Path, label: str):
+        if destination.is_file() and destination.read_text(encoding="utf-8") == content:
+            return
+        if self.check:
+            print(f"     {label} is out of date")
+            self.problems += 1
+            return
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(content, encoding="utf-8", newline="\n")
+        print(f"     wrote {label}")
+
+    def remove(self, path: Path, label: str):
+        if not path.exists():
+            return
+        if self.check:
+            print(f"     {label} should not exist any more")
+            self.problems += 1
+            return
+        shutil.rmtree(path) if path.is_dir() else path.unlink()
+        print(f"     removed {label}")
 
 
-def sources(skill: str) -> list[tuple[Path, Path]]:
-    """(source, destination-relative-path) for one skill's shipped files."""
+def skill_files(skill: str) -> list[tuple[Path, Path]]:
+    """(source, path relative to the skill directory) for one skill."""
     base = ROOT / ".agents" / "skills" / skill
-    out: list[tuple[Path, Path]] = []
+    out = []
     for name in COPIED:
         item = base / name
         if item.is_file():
@@ -89,67 +119,112 @@ def sources(skill: str) -> list[tuple[Path, Path]]:
     return out
 
 
-def sync(plugin: str, skill: str, check: bool) -> int:
+def read_manifest(plugin: str) -> dict:
+    """name, version and description from plugin.yaml, without a YAML library:
+    flat `key: value` lines, and a folded `key: >-` block."""
+    lines = (ROOT / "plugins" / plugin / "plugin.yaml").read_text(encoding="utf-8").splitlines()
+    out, i = {}, 0
+    while i < len(lines):
+        match = re.match(r"^([a-z_]+):\s*(.*)$", lines[i])
+        i += 1
+        if not match:
+            continue
+        key, value = match.groups()
+        if value in (">-", ">", "|"):
+            block = []
+            while i < len(lines) and (lines[i].startswith("  ") or not lines[i].strip()):
+                block.append(lines[i].strip())
+                i += 1
+            value = " ".join(part for part in block if part)
+        out[key] = value.strip().strip('"').strip("'")
+    return out
+
+
+def manifests(plugin: str, keywords: list[str]) -> tuple[str, str]:
+    meta = read_manifest(plugin)
+    common = {
+        "name": meta["name"],
+        "version": meta["version"],
+        "description": meta["description"],
+        "author": AUTHOR,
+        "homepage": f"{REPOSITORY}/tree/main/plugins/{plugin}",
+        "repository": REPOSITORY,
+        "license": LICENSE,
+        "keywords": keywords,
+    }
+    agent_plugins = {"$schema": AGENT_PLUGINS_SCHEMA, **common}
+    return (json.dumps(agent_plugins, ensure_ascii=False, indent=2) + "\n",
+            json.dumps(common, ensure_ascii=False, indent=2) + "\n")
+
+
+def marketplace() -> str:
+    entries = []
+    for plugin in PLUGINS:
+        meta = read_manifest(plugin)
+        entries.append({"name": meta["name"], "source": f"./plugins/{plugin}", "description": meta["description"]})
+    data = {"name": MARKETPLACE["name"], "description": MARKETPLACE["description"],
+            "owner": {"name": AUTHOR["name"]}, "plugins": entries}
+    return json.dumps(data, ensure_ascii=False, indent=2) + "\n"
+
+
+def sync_shared(drift: Drift):
+    for source_rel, skills in SHARED.items():
+        source = ROOT / source_rel
+        for skill in skills:
+            drift.file(source, ROOT / ".agents" / "skills" / skill / "scripts" / source.name,
+                       f"{skill}/scripts/{source.name}")
+
+
+def sync_plugin(drift: Drift, plugin: str, skill: str, keywords: list[str]):
     target = ROOT / "plugins" / plugin
     if not (target / "plugin.yaml").is_file():
         print(f"FAIL {plugin}: no plugin.yaml")
-        return 1
-
-    expected = sources(skill)
-    if not expected:
-        print(f"FAIL {plugin}: {skill} has nothing to copy")
-        return 1
-
-    problems = 0
-    wanted = {relative for _, relative in expected}
-
+        drift.problems += 1
+        return
+    before = drift.problems
+    skill_dir = target / "skills" / skill
+    expected = skill_files(skill)
     for source, relative in expected:
-        destination = target / relative
-        same = destination.is_file() and filecmp.cmp(source, destination, shallow=False)
-        if same:
-            continue
-        if check:
-            print(f"     {plugin}/{relative.as_posix()} differs from {skill}")
-            problems += 1
-            continue
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, destination)
-        print(f"     copied {relative.as_posix()}")
+        drift.file(source, skill_dir / relative, f"{plugin}/skills/{skill}/{relative.as_posix()}")
 
     # A file dropped from the skill has to disappear from the plugin too,
     # otherwise the plugin keeps shipping code nobody maintains any more.
-    for existing in sorted((target / "scripts").rglob("*")) if (target / "scripts").is_dir() else []:
-        if not existing.is_file():
-            continue
-        relative = existing.relative_to(target)
-        if relative in wanted:
-            continue
-        if check:
-            print(f"     {plugin}/{relative.as_posix()} is not in {skill} any more")
-            problems += 1
-        else:
-            existing.unlink()
-            print(f"     removed {relative.as_posix()}")
+    wanted = {skill_dir / relative for _, relative in expected}
+    for existing in sorted((target / "skills").rglob("*")) if (target / "skills").is_dir() else []:
+        if existing.is_file() and existing not in wanted and "__pycache__" not in existing.parts:
+            drift.remove(existing, f"{plugin}/{existing.relative_to(target).as_posix()}")
+    for other in sorted((target / "skills").iterdir()) if (target / "skills").is_dir() else []:
+        if other.is_dir() and other.name != skill:
+            drift.remove(other, f"{plugin}/skills/{other.name}/")
+    # The layout before the per-platform packaging kept the skill at the root.
+    drift.remove(target / "SKILL.md", f"{plugin}/SKILL.md (moved to skills/{skill}/)")
+    drift.remove(target / "scripts", f"{plugin}/scripts/ (moved to skills/{skill}/)")
 
-    if problems:
-        print(f"FAIL {plugin}")
+    agent_plugins, claude = manifests(plugin, keywords)
+    drift.text(agent_plugins, target / "plugin.json", f"{plugin}/plugin.json")
+    drift.text(claude, target / ".claude-plugin" / "plugin.json", f"{plugin}/.claude-plugin/plugin.json")
+
+    if drift.problems == before:
+        print(f"ok   {plugin} <- {skill} ({len(expected)} file(s), 3 manifests)")
     else:
-        print(f"ok   {plugin} <- {skill} ({len(expected)} file(s))")
-    return problems
+        print(f"FAIL {plugin}")
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--check", action="store_true",
-                        help="report drift and exit non-zero instead of copying")
+                        help="report drift and exit non-zero instead of writing")
     arguments = parser.parse_args()
 
-    total = sync_shared(arguments.check)
-    total += sum(sync(plugin, skill, arguments.check) for plugin, skill in PAIRS.items())
+    drift = Drift(arguments.check)
+    sync_shared(drift)
+    for plugin, (skill, keywords) in PLUGINS.items():
+        sync_plugin(drift, plugin, skill, keywords)
+    drift.text(marketplace(), ROOT / ".claude-plugin" / "marketplace.json", ".claude-plugin/marketplace.json")
 
     print()
-    if total:
-        print(f"{total} file(s) out of step. Run: py tools/sync_plugins.py", file=sys.stderr)
+    if drift.problems:
+        print(f"{drift.problems} file(s) out of step. Run: py tools/sync_plugins.py", file=sys.stderr)
         return 1
     print("Plugins match their skills.")
     return 0

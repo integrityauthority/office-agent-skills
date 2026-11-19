@@ -1,15 +1,18 @@
 """File Connector — let Hermes read PDF, e-mail and Office files from disk
 without writing a parser each time.
 
-A thin adapter. The code lives in ``scripts/files.py`` and
-``scripts/msgfile.py``, the same files the portable `file-reader` Agent Skill
+A thin adapter. The code lives in ``skills/file-reader/scripts/files.py`` and
+``.../msgfile.py``, the same files the portable `file-reader` Agent Skill
 ships; `tools/sync_plugins.py` copies them here and CI fails if they drift.
 Edit the skill, not this copy.
 """
 from pathlib import Path
 import sys
 
-_SCRIPTS = Path(__file__).parent / "scripts"
+# The skill lives in skills/file-reader/ (the Agent Skills layout every platform reads);
+# tools/sync_plugins.py copies it there from .agents/skills/file-reader/.
+_SKILL_DIR = Path(__file__).parent / "skills" / "file-reader"
+_SCRIPTS = _SKILL_DIR / "scripts"
 
 READ_SCHEMA = {
     "type": "object",
@@ -144,7 +147,7 @@ def register(ctx):
         emoji="\N{FRAME WITH PICTURE}",
     )
 
-    skill = Path(__file__).parent / "SKILL.md"
+    skill = _SKILL_DIR / "SKILL.md"
     if skill.exists():
         ctx.register_skill(
             "file-reader", skill,

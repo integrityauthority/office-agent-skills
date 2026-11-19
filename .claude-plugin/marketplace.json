@@ -1,0 +1,24 @@
+{
+  "name": "office-agent-skills",
+  "description": "Agent skills for office work: read PDF, e-mail and Office files, work live in Word, Excel, PowerPoint and Outlook, search your own Microsoft 365.",
+  "owner": {
+    "name": "Integritás Hatóság"
+  },
+  "plugins": [
+    {
+      "name": "office-connector",
+      "source": "./plugins/office-connector",
+      "description": "Let Hermes work in Word, Excel, PowerPoint and classic Outlook. Drives the documents you already have open rather than producing new files, so edits appear in the window in front of you and Word changes arrive as tracked revisions you can accept or reject. In Outlook it searches mail, calendar and contacts and composes messages and meetings, then opens them for you — it never sends or saves; you press Send. Windows for now."
+    },
+    {
+      "name": "ms-graph-connector",
+      "source": "./plugins/ms-graph-connector",
+      "description": "Give Hermes read access to your own Microsoft 365: Outlook mail, OneDrive and SharePoint documents, Teams chats and your calendar, through the Microsoft Graph API. It sees exactly what you see and nothing more, signs you in through your browser, and cannot write -- every tool here is read-only."
+    },
+    {
+      "name": "file-connector",
+      "source": "./plugins/file-connector",
+      "description": "Let Hermes read files from disk in one call: PDF (scanned pages through the organisation's OCR model), Outlook .msg and .eml e-mails with their attachments, Word, Excel, PowerPoint, HTML and text. Reads an attachment in place, saves attachments to a folder, renders PDF pages for a vision model. Read-only; a page with a text layer never leaves the machine."
+    }
+  ]
+}

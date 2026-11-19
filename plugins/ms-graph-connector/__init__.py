@@ -2,7 +2,7 @@
 user's own Microsoft 365 content.
 
 A thin adapter, like its sibling. Everything it exposes lives in
-``scripts/microsoft_graph.py``, the same file the portable `m365-graph` Agent
+``skills/m365-graph/scripts/microsoft_graph.py``, the same file the portable `m365-graph` Agent
 Skill ships; `tools/sync_plugins.py` copies it here and CI fails if the two
 drift. Edit the skill, not this copy.
 
@@ -15,7 +15,10 @@ from pathlib import Path
 import json
 import sys
 
-_SCRIPTS = Path(__file__).parent / "scripts"
+# The skill lives in skills/m365-graph/ (the Agent Skills layout every platform reads);
+# tools/sync_plugins.py copies it there from .agents/skills/m365-graph/.
+_SKILL_DIR = Path(__file__).parent / "skills" / "m365-graph"
+_SCRIPTS = _SKILL_DIR / "scripts"
 
 SEARCH_SCHEMA = {
     "type": "object",
@@ -165,7 +168,7 @@ def register(ctx):
         emoji="\N{GLOBE WITH MERIDIANS}",
     )
 
-    skill = Path(__file__).parent / "SKILL.md"
+    skill = _SKILL_DIR / "SKILL.md"
     if skill.exists():
         ctx.register_skill(
             "m365-graph", skill,

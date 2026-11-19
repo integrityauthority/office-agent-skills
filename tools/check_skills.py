@@ -41,6 +41,13 @@ KNOWN_EXTENSIONS = {
 }
 
 SAFE_SKILL_NAME = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
+
+# The Agent Skills specification (agentskills.io): the only top-level
+# frontmatter keys, and the limits strict loaders enforce.
+SPEC_FIELDS = {"name", "description", "license", "compatibility", "metadata", "allowed-tools"}
+SPEC_NAME = re.compile(r"^(?!.*--)[a-z0-9]+(?:-[a-z0-9]+)*$")
+MAX_DESCRIPTION = 1024
+MAX_COMPATIBILITY = 500
 FRONTMATTER = re.compile(r"\A---\r?\n(.*?)\r?\n---(?:\r?\n|\Z)", re.DOTALL)
 
 
@@ -140,6 +147,19 @@ def check_skill(directory: Path) -> list[str]:
                 problems.append(f"SKILL.md frontmatter is missing '{key}'")
         if fields.get("name") and fields["name"] != name:
             problems.append(f"SKILL.md declares name '{fields['name']}' but the directory is '{name}'")
+        # Strict loaders -- Agent Plugins clients, Hermes' portable packages,
+        # skills-ref -- skip or reject a skill outside the specification.
+        unknown = sorted(set(fields) - SPEC_FIELDS)
+        if unknown:
+            problems.append(f"SKILL.md frontmatter has non-standard key(s) {', '.join(unknown)}; "
+                            "put them under metadata: (string values)")
+        if len(fields.get("description", "")) > MAX_DESCRIPTION:
+            problems.append(f"description is {len(fields['description'])} characters; "
+                            f"the specification allows {MAX_DESCRIPTION}")
+        if fields.get("name") and not SPEC_NAME.match(fields["name"]):
+            problems.append("name must be lowercase letters, digits and single hyphens")
+        if len(fields.get("compatibility", "")) > MAX_COMPATIBILITY:
+            problems.append(f"compatibility is longer than {MAX_COMPATIBILITY} characters")
 
     files = bundled_files(directory)
     if len(files) > MAX_FILES_PER_SKILL:

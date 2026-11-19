@@ -1,6 +1,6 @@
 manifest_version: 2
 name: file-connector
-version: 1.2.0
+version: 1.3.0
 description: >-
   Let Hermes read files from disk in one call: PDF (scanned pages through the
   organisation's OCR model), Outlook .msg and .eml e-mails with their

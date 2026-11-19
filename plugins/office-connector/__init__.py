@@ -2,7 +2,7 @@
 documents the user already has open.
 
 This plugin is a thin adapter. Everything it exposes lives in
-``scripts/office_kernel.py`` and ``scripts/office.py``, which are the same
+``skills/office-live/scripts/office_kernel.py`` and ``office.py``, the same
 files the portable `office-live` Agent Skill ships; `tools/sync_plugins.py`
 copies them here and CI fails if the two ever drift. Edit the skill, not this
 copy.
@@ -20,7 +20,10 @@ platform.
 from pathlib import Path
 import sys
 
-_SCRIPTS = Path(__file__).parent / "scripts"
+# The skill lives in skills/office-live/ (the Agent Skills layout every platform reads);
+# tools/sync_plugins.py copies it there from .agents/skills/office-live/.
+_SKILL_DIR = Path(__file__).parent / "skills" / "office-live"
+_SCRIPTS = _SKILL_DIR / "scripts"
 
 EXEC_SCHEMA = {
     "type": "object",
@@ -116,7 +119,7 @@ def register(ctx):
     # skill out of `<available_skills>`, so this is not how the agent discovers
     # the capability -- the three tools above are. It is here for when the agent
     # needs the recipes, the COM pitfalls and the worked examples.
-    skill = Path(__file__).parent / "SKILL.md"
+    skill = _SKILL_DIR / "SKILL.md"
     if skill.exists():
         ctx.register_skill(
             "office-live", skill,

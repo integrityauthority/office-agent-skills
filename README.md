@@ -81,46 +81,75 @@ skills:
 apb pull <playbook-guid> --apply      # writes .agents/skills/, scripts included
 ```
 
-## As Hermes plugins
+## As plugins, for every platform
 
-The same code is also packaged as three [Hermes Agent](https://hermes-agent.nousresearch.com)
-plugins, so a colleague installs one thing instead of copying folders and
-editing `config.yaml`:
+The same code is packaged as three plugins. Each plugin directory is one
+package that several platforms read at once, so the install is one command
+wherever you are:
 
-| Plugin | What it gives Hermes | Tools |
+| Plugin | What it gives the agent | Hermes tools |
 |---|---|---|
-| `office-connector` | Work in the Word, Excel and PowerPoint documents you already have open | `office_status`, `office_exec`, `office_reset` |
+| `office-connector` | Work in the Word, Excel, PowerPoint and Outlook windows you already have open (Windows) | `office_status`, `office_exec`, `office_reset` |
 | `ms-graph-connector` | Read your own Microsoft 365: Outlook mail, OneDrive and SharePoint files, Teams chats, calendar | `m365_status`, `m365_login`, `m365_search`, `m365_get` |
-| `file-connector` | Read PDF (with OCR for scanned pages), .msg and .eml e-mails with attachments, Word, Excel and PowerPoint files from disk | `file_read`, `file_find`, `file_attachments`, `file_render` |
+| `file-connector` | Read and search PDF (with OCR for scanned pages), .msg and .eml e-mails with attachments, Word, Excel and PowerPoint files from disk | `file_read`, `file_find`, `file_attachments`, `file_render` |
+
+**Hermes Agent**: the tools appear in the tool catalogue.
 
 ```bash
-hermes plugins install integrityauthority/office-agent-skills#plugins/office-connector
-hermes plugins install integrityauthority/office-agent-skills#plugins/ms-graph-connector
 hermes plugins install integrityauthority/office-agent-skills#plugins/file-connector
 ```
 
-Both pass `hermes plugins validate`, the catalogue admission gate.
-`ms-graph-connector` scans clean; `office-connector` passes with a caution,
-for the reason set out under **What they do and do not do**.
+**Claude Code**: this repository is a plugin marketplace.
 
-### One source, two shapes
+```bash
+/plugin marketplace add integrityauthority/office-agent-skills
+/plugin install file-connector@office-agent-skills
+```
 
-The Python lives in exactly one place, `.agents/skills/<skill>/`. A plugin
-directory is an adapter — a manifest and a `register()` — plus a **copy** of
-that skill's files.
+**Codex, Cursor, GitHub Copilot, VS Code and other
+[Agent Plugins](https://vercel.com/kb/guide/agent-plugins) clients**: each
+`plugins/<plugin>/` directory is an Agent Plugins 1.0 package (`plugin.json`
+plus `skills/`). Install it the way your client installs a plugin directory.
 
-The copy is not a preference. `hermes plugins install` installs one directory
-and nothing outside it comes along, so a plugin that reached up into
+**Any agent that reads [Agent Skills](https://agentskills.io)**: the skills
+themselves are in `.agents/skills/`, and inside each plugin under `skills/`.
+
+Every package passes its platform's own validator: `hermes plugins validate`
+(security scan: safe for `file-connector` and `ms-graph-connector`;
+`office-connector` passes with a caution, for the reason set out under
+**What they do and do not do**), `claude plugin validate --strict`, and the
+Agent Plugins 1.0 loader. The tests in `tests/test_packaging.py` hold the
+packages to the same rules, so a store rejection is found in CI first.
+
+### One source, every shape
+
+The Python lives in exactly one place, `.agents/skills/<skill>/` (and
+`shared/` for code two skills need). A plugin directory is generated around
+it:
+
+```
+plugins/<plugin>/
+  plugin.yaml, __init__.py      Hermes (hand-written: the tool adapter)
+  plugin.json                   Agent Plugins 1.0
+  .claude-plugin/plugin.json    Claude Code
+  skills/<skill>/               the skill, copied: SKILL.md and scripts/
+.claude-plugin/marketplace.json the Claude Code marketplace
+```
+
+Hermes reads `plugin.yaml` and ignores the `plugin.json` beside it, so the
+manifests never compete. The copy is not a preference: every installer takes
+one directory and nothing outside it, so a plugin that reached up into
 `.agents/` would validate here and be broken for everyone who installed it.
-What keeps the copy honest is that it is generated:
+What keeps the copies and the manifests honest is that they are generated
+from the skill and `plugin.yaml`:
 
 ```bash
 py tools/sync_plugins.py            # refresh
 py tools/sync_plugins.py --check    # fail on drift — CI runs this
 ```
 
-Edit the skill, run the sync, commit both. Never edit a file under
-`plugins/*/scripts/`.
+Edit the skill or `plugin.yaml`, run the sync, commit all of it. Never edit a
+file under `plugins/*/skills/` or a generated `plugin.json`.
 
 ### Plugin or skill?
 
@@ -128,8 +157,9 @@ Install the **plugin** if you use Hermes: the tools appear in the tool
 catalogue where the model can see them, one warm COM connection serves the
 whole session, and there is no MCP server to wire up.
 
-Take the **skill** for anything else — Claude Code, Cursor, Codex — or when
-you want the instructions without the tools. Note that a skill registered by
+Take the **skill** (or the plugin, which carries it) for anything else —
+Claude Code, Cursor, Codex — or when you want the instructions without the
+tools; there the agent runs the same scripts from its terminal. Note that a skill registered by
 a plugin is deliberately left out of Hermes' `<available_skills>`, so inside
 Hermes the tools are what the agent discovers; the skill document rides along
 as reference material.

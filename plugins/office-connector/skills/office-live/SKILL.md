@@ -1,9 +1,11 @@
 ---
 name: office-live
-description: Work live in the user's running Microsoft Office on Windows over COM — read and edit the OPEN Word, Excel or PowerPoint document, and in classic Outlook search mail, read messages, compose new mail, replies and forwards with attachments and formatting, look up contacts and the calendar, and prepare appointments. Use when the user refers to "this document", "the open file", "my selection", "my inbox", "reply to that email", "my calendar", or asks for work in place rather than as a new file. When the user asks you to open Word or Excel, start that application yourself and create or open the document there. Calling new_doc again while that document is unsaved returns the same window instead of opening another. Outlook items are composed and opened for the user to review — this skill never sends or saves mail. Non-ASCII text, including Hungarian, goes through office_exec only. Do NOT type it with computer-use, and do NOT write a .vbs/.ps1 for cscript or PowerShell — those read UTF-8 as the ANSI code page and corrupt the characters. Do NOT use for generating a document from scratch (write a .docx/.xlsx/.pptx file instead), and do NOT use on non-Windows machines.
-version: 2.4.1
-author: Integritás Hatóság
-platforms: [windows]
+description: Work live in the user's running Microsoft Office on Windows over COM — read and edit the OPEN Word, Excel or PowerPoint document, and in classic Outlook search and read mail, compose new mail, replies and forwards with attachments, and use contacts and the calendar. Use when the user refers to "this document", "the open file", "my selection", "my inbox", "reply to that email", "my calendar", or wants work done in place rather than as a new file; when asked to open Word or Excel, start it and open the document there. Outlook items are composed and shown for review — this skill never sends or saves mail. Non-ASCII text, including Hungarian, goes through office_exec only, never computer-use typing or a .vbs/.ps1 script, which corrupt it. Do NOT use to generate a document from scratch (write a .docx/.xlsx/.pptx file instead), and do NOT use on non-Windows machines.
+license: MIT
+compatibility: Windows with Microsoft Office desktop (Word, Excel, PowerPoint, classic Outlook) and Python with pywin32.
+metadata:
+  version: "2.4.2"
+  author: Integritás Hatóság
 ---
 
 # office-live

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "file-connector",
+  "version": "1.3.0",
+  "description": "Let Hermes read files from disk in one call: PDF (scanned pages through the organisation's OCR model), Outlook .msg and .eml e-mails with their attachments, Word, Excel, PowerPoint, HTML and text. Reads an attachment in place, saves attachments to a folder, renders PDF pages for a vision model. Read-only; a page with a text layer never leaves the machine.",
+  "author": {
+    "name": "Integritás Hatóság",
+    "url": "https://github.com/integrityauthority"
+  },
+  "homepage": "https://github.com/integrityauthority/office-agent-skills/tree/main/plugins/file-connector",
+  "repository": "https://github.com/integrityauthority/office-agent-skills",
+  "license": "MIT",
+  "keywords": [
+    "pdf",
+    "ocr",
+    "msg",
+    "eml",
+    "email",
+    "docx",
+    "xlsx",
+    "search"
+  ]
+}
