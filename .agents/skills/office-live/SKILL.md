@@ -4,7 +4,7 @@ description: Work live in the user's running Microsoft Office on Windows over CO
 license: MIT
 compatibility: Windows with Microsoft Office desktop (Word, Excel, PowerPoint, classic Outlook) and Python with pywin32.
 metadata:
-  version: "2.4.3"
+  version: "2.4.4"
   author: Integritás Hatóság
 ---
 
@@ -18,6 +18,18 @@ they can accept or reject.
 
 Everything runs on the interpreter Hermes already uses — pywin32 is installed
 there, so there is nothing to set up.
+
+## Read in the background, write in front of the user
+
+- **Reading** documents — one or many, to answer, summarise, compare or
+  collect — happens at file level, in the background: the file-reader tools
+  (`file_read`, `file_find`). Do not open a Word or Excel window just to read
+  a file the user has not opened.
+- **Producing** a document — a letter, a table, a summary the user will keep
+  — happens here, in a document open in front of them: `new_doc` or
+  `open_doc`, then write into it, so they watch it take shape and can
+  correct it. Do not build the deliverable as a closed file in the background
+  and hand over only a path.
 
 ## How to call it
 

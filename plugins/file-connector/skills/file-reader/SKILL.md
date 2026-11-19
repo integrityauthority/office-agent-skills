@@ -4,7 +4,7 @@ description: Read files on disk as text in one call — PDF (scanned pages go th
 license: MIT
 compatibility: Any OS with Python 3.10+. pypdfium2, pdfplumber, pdfminer.six, olefile, openpyxl and pillow give full coverage; OCR settings are in the repository README.
 metadata:
-  version: "1.3.0"
+  version: "1.3.1"
   author: Integritás Hatóság
 ---
 
@@ -12,6 +12,11 @@ metadata:
 
 Call `file_read` with the full path. Do not write a script to parse a PDF,
 an .msg or an .eml: this tool already does it, and it is faster.
+
+Reading happens here, at file level, in the background: nothing opens on the
+user's screen. When the result is a document for the user — a reply, a
+table, a summary — write it with office-live into a document open in front
+of them, not into a closed file.
 
 | Want | Call |
 |---|---|

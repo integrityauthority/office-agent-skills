@@ -18,6 +18,13 @@ them from a URL.
 The first two are Windows-and-Microsoft specific, which is why they live here
 rather than upstream in any one agent's repository.
 
+They follow one rule between them: **read in the background, write in front
+of the user.** Reading documents — one or a folder of them, to answer,
+search, summarise or collect — is file-level work with `file-reader` (or
+`m365-graph` for the cloud) and opens nothing on screen. Producing a document
+the user will keep happens with `office-live`, in a Word, Excel or PowerPoint
+window open in front of them, so they see it take shape and can correct it.
+
 > ### Read this before pointing them at real work
 >
 > These skills act as **you**, with your privileges. `office-live` can change
