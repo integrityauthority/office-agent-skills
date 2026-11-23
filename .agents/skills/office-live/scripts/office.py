@@ -96,7 +96,7 @@ def emit(payload, code=0):
     if note:
         payload = dict(payload, prefer=note)
     # A pipe on Windows defaults to the ANSI code page (cp1252), which cannot
-    # write ő or ű: every answer naming a Hungarian document or mail failed
+    # write ő or ű: every answer naming a Central European document or mail failed
     # with UnicodeEncodeError when an agent ran this from its terminal.
     try:
         sys.stdout.reconfigure(encoding="utf-8")
@@ -781,6 +781,44 @@ def count_text(doc, needle, match_case=True, accepted=True):
         total += (text.count(needle) if match_case
                   else text.lower().count(needle.lower()))
     return total
+
+
+def _replace_long(doc, story, old, new, match_case):
+    """Replace a pattern longer than Find.Text accepts (255 characters).
+
+    Find locates the first 255 characters; the range is then stretched to the
+    full length and compared, and only an exact match is replaced. Setting
+    Range.Text honours Track Changes, like Find's own replace. The search
+    resumes after each replacement. With tracking on, the old text stays in
+    the story as a deletion next to the new one, and Find still matches it,
+    so the search skips both; otherwise it would replace the same spot again
+    and again.
+    """
+    head = old[:FIND_TEXT_LIMIT]
+    wanted = old if match_case else old.lower()
+    tracked = bool(getattr(doc, "TrackRevisions", False))
+    position = story.Start
+    for _ in range(2_000):                       # a hard stop against a runaway loop
+        rng = story.Duplicate
+        rng.SetRange(position, story.End)
+        find = rng.Find
+        find.ClearFormatting()
+        find.Text = head
+        find.Forward = True
+        find.Wrap = 0                            # wdFindStop
+        find.MatchCase = match_case
+        find.MatchWildcards = False
+        if not find.Execute():
+            return
+        start = rng.Start
+        candidate = story.Duplicate
+        candidate.SetRange(start, start + len(old))
+        text = candidate.Text or ""
+        if (text if match_case else text.lower()) == wanted:
+            candidate.Text = new
+            position = start + len(old) + len(new) if tracked else candidate.End
+        else:
+            position = start + 1
 
 
 def _replace_word(doc, old, new, match_case):
