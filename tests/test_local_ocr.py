@@ -8,7 +8,7 @@ import pdfread
 from conftest import UNREACHABLE
 from pdfbuilder import build_pdf
 
-SCANS = build_pdf(["Egy szöveges oldal, amelynek van rendes szövegrétege.", None, None])
+SCANS = build_pdf(["A page of text that has a proper text layer.", None, None])
 
 
 def test_auto_reads_a_scan_on_this_machine(fake_local_ocr, fake_ocr, monkeypatch):
@@ -31,7 +31,7 @@ def test_server_on_request(fake_local_ocr, fake_ocr, monkeypatch):
     r = pdfread.read_pages(SCANS, ocr="server", pages="2")
     assert r["sources"] == {1: "ocr-server"}
     assert fake_local_ocr.calls == []
-    assert "Tétel\tÖsszeg" in r["texts"][1]              # the server keeps table structure
+    assert "Item\tAmount" in r["texts"][1]            # the server keeps table structure
 
 
 def test_server_unreachable_falls_back_to_windows(fake_local_ocr, monkeypatch):
@@ -83,9 +83,9 @@ def test_local_settings_respects_off(monkeypatch):
 
 
 def test_describe_settings(fake_local_ocr, monkeypatch):
-    monkeypatch.setenv("OCR_LOCAL_LANGUAGE", "hu")
+    monkeypatch.setenv("OCR_LOCAL_LANGUAGE", "en-US")
     assert pdfread.describe_settings()["ocr_local"] == {"available": True, "engine": "Windows OCR",
-                                                        "language": "hu"}
+                                                        "language": "en-US"}
 
 
 def _windows_ocr_here():
@@ -103,7 +103,7 @@ def _windows_ocr_here():
 def test_real_windows_ocr_reads_a_rendered_page(monkeypatch):
     """The real engine, on a page this test draws and renders: no fixture file."""
     monkeypatch.delenv("OCR_LOCAL", raising=False)
-    doc = pdfread.open_pdf(build_pdf(["Integrity Authority quarterly report\n"
+    doc = pdfread.open_pdf(build_pdf(["Example Ltd quarterly report\n"
                                       "Procurement review of the second quarter"]))   # one page, two lines
     try:
         png = pdfread.render_png(doc, 0, pdfread.LOCAL_DPI, pdfread.LOCAL_MAX_PIXELS)

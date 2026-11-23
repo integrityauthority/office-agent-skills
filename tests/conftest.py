@@ -41,7 +41,7 @@ def fake_local_ocr(monkeypatch):
     import pdfread
 
     class Fake:
-        reply = "Windows OCR szövege az oldalról, elég hosszú ahhoz, hogy számítson."
+        reply = "Windows OCR text of the page, long enough to count."
         error = None
         calls = []
 
@@ -63,10 +63,10 @@ class FakeOcr:
     /v1/responses like a cloud vision model. Records every request."""
 
     SERVER_TEXT = ("<|ref|>text<|/ref|><|det|>[[10, 20, 300, 40]]<|/det|>\n"
-                   "Szkennelt oldal szövege, összeférhetetlenség\n"
+                   "Text of a scanned page, with the résumé\n"
                    "<|ref|>table<|/ref|><|det|>[[1, 2, 3, 4]]<|/det|>\n"
-                   "<table><tr><td>Tétel</td><td>Összeg</td></tr><tr><td>A</td><td>100</td></tr></table>")
-    CLOUD_TEXT = "Felhőből olvasott oldal, elég hosszú szöveg ahhoz, hogy számítson."
+                   "<table><tr><td>Item</td><td>Amount</td></tr><tr><td>A</td><td>100</td></tr></table>")
+    CLOUD_TEXT = "A page read in the cloud, a text long enough to count."
 
     def __init__(self):
         self.requests = []

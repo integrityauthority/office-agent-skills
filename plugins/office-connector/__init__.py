@@ -123,5 +123,5 @@ def register(ctx):
     if skill.exists():
         ctx.register_skill(
             "office-live", skill,
-            description="Edit the OPEN Word, Excel or PowerPoint document with office_exec. If the user asks, start Word or Excel with new_doc or open_doc and launch=True. Another new_doc while that document is unsaved returns the same window, even when the previous call succeeded. Do not open a second one. Set Word styles by id (-63 title, -2 heading). Do not set a table style by its English name. Hungarian text must be a Python string there. Never use computer-use, cscript, or a .vbs/.ps1 file: Windows Script Host reads UTF-8 as the ANSI code page and corrupts the characters.",
+            description="Edit the OPEN Word, Excel or PowerPoint document with office_exec. If the user asks, start Word or Excel with new_doc or open_doc and launch=True. Another new_doc while that document is unsaved returns the same window, even when the previous call succeeded. Do not open a second one. Set Word styles by id (-63 title, -2 heading). Do not set a table style by its English name. Accented text must be a Python string there. Never use computer-use, cscript, or a .vbs/.ps1 file: Windows Script Host reads UTF-8 as the ANSI code page and corrupts the characters.",
         )

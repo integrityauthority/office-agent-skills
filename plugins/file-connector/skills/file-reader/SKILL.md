@@ -1,10 +1,10 @@
 ---
 name: file-reader
-description: Read files on disk as text in one call — PDF and images (scanned pages, photos and screenshots go through OCR), Outlook .msg and .eml e-mails with their attachments, Word .docx, Excel .xlsx and 97-2003 .xls, PowerPoint .pptx, HTML and plain text. Search inside a document, an e-mail with its attachments, or a whole folder, with page-level locations. Read an attachment or a .zip member without saving it, save attachments, unpack a .zip safely, tabulate a folder or .zip of letters and documents (sender, date, signers, labelled values), or render PDF pages and pictures as images to look at, whole or one region enlarged. Use when the user points at a file path or an e-mail file ("olvasd el ezt a PDF-et", "mi van ebben a levélben", "nézd meg a mellékletet", "szkennelt PDF"). Do NOT use for a document the user has OPEN in Word, Excel or PowerPoint, or for mail in the running Outlook — that is office-live. Do NOT use for OneDrive or SharePoint files — that is m365-graph.
+description: Read files on disk as text in one call — PDF and images (scanned pages, photos and screenshots go through OCR), Outlook .msg and .eml e-mails with their attachments, Word .docx, Excel .xlsx and 97-2003 .xls, PowerPoint .pptx, HTML and plain text. Search inside a document, an e-mail with its attachments, or a whole folder, with page-level locations. Read an attachment or a .zip member without saving it, save attachments, unpack a .zip safely, tabulate a folder or .zip of letters and documents (sender, date, signers, labelled values), or render PDF pages and pictures as images to look at, whole or one region enlarged. Use when the user points at a file path or an e-mail file ("read this PDF", "what is in this email", "check the attachment", "scanned PDF"). Do NOT use for a document the user has OPEN in Word, Excel or PowerPoint, or for mail in the running Outlook — that is office-live. Do NOT use for OneDrive or SharePoint files — that is m365-graph.
 license: MIT
 compatibility: Any OS with Python 3.10+. pypdfium2, pdfplumber, pdfminer.six, olefile, openpyxl, xlrd, pillow and pypdf give full coverage; OCR settings are in the repository README.
 metadata:
-  version: "1.6.0"
+  version: "1.6.1"
   author: Integritás Hatóság
 ---
 
@@ -34,7 +34,7 @@ of them, not into a closed file.
 | what is in a .zip | `file_read(path)` on the .zip: a member list |
 | one file inside a .zip, without unpacking | `file_read(path, attachment="3")` or `attachment="name.pdf"` |
 | the .zip as a folder | `file_unpack(path)` (or `dest=`) |
-| values written after labels | `file_read(path, labels="Iktatószám, Határidő")` |
+| values written after labels | `file_read(path, labels="Reference no, Deadline")` |
 | a table of a folder or .zip of letters / documents | `file_collect(folder, labels=..., query=...)` |
 
 ## What comes back
@@ -68,7 +68,7 @@ follow the hint instead of retrying the same call.
   (and `box` when cropped). `box` is `left,top,right,bottom` as fractions of
   the page from its top-left corner. Use it to check a value an OCR reading
   is unsure of; say what you saw on the image, not what the OCR said.
-- **labels**: `{"Iktatószám": "123/2026"}` — the rest of the line after each
+- **labels**: `{"Reference no": "123/2026"}` — the rest of the line after each
   label. Case and accents are ignored; a label not found is left out. Check
   a value that matters against the `text`.
 - **Collect** (`file_collect`): `count`, `columns` and one row per file —
@@ -136,7 +136,7 @@ import sys; sys.path.insert(0, r"<skill dir>\scripts")
 from files import read_file, find_in_files, collect_files, unpack_file, save_attachments, render_pages, status
 read_file(r"C:\path\file.pdf", pages="1-3")
 find_in_files(r"C:\path\file.pdf", "words")
-collect_files(r"C:\path\letters", labels="Iktatószám")
+collect_files(r"C:\path\letters", labels="Reference no")
 ```
 
 or from a terminal: `py scripts/files.py read <path> [--pages 1-3] [--attachment 2] [--labels "A, B"]`,

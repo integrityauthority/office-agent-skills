@@ -23,7 +23,7 @@ also the safe thing.
 Only classic Outlook (OUTLOOK.EXE) has a COM interface. The new Outlook
 (olk.exe) has none, and nothing here can work with it.
 
-Measured on this machine (Hungarian locale), because the obvious filter syntax
+Measured on a Windows machine with a Central European locale, because the obvious filter syntax
 is wrong here:
 
 * Jet date filters (`[ReceivedTime] >= 'YYYY-MM-DD HH:MM'`) match local time
@@ -593,7 +593,7 @@ def new_appointment(subject, start, end=None, minutes=60, location=None,
 
 def resolve(name):
     """Look a person up in the address book (GAL included). Returns
-    {"name", "email"} or None. For "send it to Kovács" — resolve first."""
+    {"name", "email"} or None. For "send it to Smith" — resolve first."""
     recipient = _raw_ns().CreateRecipient(name)
     if not recipient.Resolve():
         return None

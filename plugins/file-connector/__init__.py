@@ -31,8 +31,8 @@ READ_SCHEMA = {
         "max_chars": {"type": "integer", "description": "Cap on returned text. Default 40000."},
         "labels": {"type": "string",
                    "description": "Comma-separated labels whose values to pick out, e.g. "
-                                  "'Iktatószám, Tulajdonos': 'Iktatószám: 123/2026' gives "
-                                  "{'Iktatószám': '123/2026'}. Case and accents are ignored."},
+                                  "'Reference no, Owner': 'Reference no: 123/2026' gives "
+                                  "{'Reference no': '123/2026'}. Case and accents are ignored."},
     },
     "required": ["path"],
 }
@@ -42,7 +42,7 @@ COLLECT_SCHEMA = {
     "properties": {
         "path": {"type": "string", "description": "Full path of a folder, or of a .zip archive."},
         "labels": {"type": "string", "description": "Comma-separated labels whose values become "
-                                                    "columns, e.g. 'Iktatószám, Határidő'."},
+                                                    "columns, e.g. 'Reference no, Deadline'."},
         "query": {"type": "string", "description": "Words to count in each file (case and accents "
                                                    "ignored); adds 'hits' and 'first_hit' columns."},
         "regex": {"type": "boolean", "description": "Treat query as a regular expression."},
@@ -102,7 +102,7 @@ FIND_SCHEMA = {
         "query": {"type": "string", "description": "Words to find. Case and accents are ignored and "
                                                    "any whitespace may separate the words."},
         "regex": {"type": "boolean", "description": "Treat query as a regular expression, e.g. "
-                                                    "'kifejezés1|kifejezés2'."},
+                                                    "'term1|term2'."},
         "exact": {"type": "boolean", "description": "Case and accents must match."},
         "pages": {"type": "string", "description": "PDF pages to search, e.g. '1-20'. Default: all."},
         "ocr": {"type": "string", "enum": ["auto", "server", "cloud", "never"],

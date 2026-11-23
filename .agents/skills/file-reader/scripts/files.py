@@ -837,7 +837,7 @@ FIND_XLSX_MAX_ROWS = 200_000
 
 def _fold(text):
     """Lower-case and strip accents, keeping a map back to the original
-    positions: 'Összeférhetetlenség' and 'osszeferhetetlenseg' match."""
+    positions: 'Résumé review' and 'resume review' match."""
     import unicodedata
     chars, index = [], []
     for i, ch in enumerate(text):

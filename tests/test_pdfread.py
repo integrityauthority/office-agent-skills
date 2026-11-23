@@ -8,7 +8,7 @@ import pdfread
 from conftest import UNREACHABLE
 from pdfbuilder import build_pdf
 
-TEXT_PAGE = "Az összeférhetetlenségi szabályok\nés a teljesítménymérés módszertana\nmásodik sor"
+TEXT_PAGE = "The résumé screening rules\nand the performance review method\nsecond line"
 TWO_SCANS = build_pdf([TEXT_PAGE, None, None])
 
 
@@ -24,7 +24,7 @@ def test_text_layer_stays_local(fake_ocr, monkeypatch):
     monkeypatch.setenv("OCR_URL", fake_ocr.url)
     r = pdfread.read_pages(build_pdf([TEXT_PAGE]))
     assert r["sources"] == {0: "text-layer"}
-    assert "összeférhetetlenségi" in r["texts"][0]
+    assert "résumé screening" in r["texts"][0]
     assert fake_ocr.requests == []          # a text page never goes to OCR
 
 
@@ -41,7 +41,7 @@ def test_scan_goes_to_the_ocr_server_and_is_cleaned(fake_ocr, monkeypatch):
     assert r["sources"] == {0: "text-layer", 1: "ocr-server", 2: "ocr-server"}
     text = r["texts"][1]
     assert "<|" not in text and "<table" not in text
-    assert "Tétel\tÖsszeg" in text and "A\t100" in text
+    assert "Item\tAmount" in text and "A\t100" in text
     assert len(fake_ocr.calls("/chat/completions")) == 2
 
 
@@ -132,8 +132,8 @@ def test_server_key_is_sent(fake_ocr, monkeypatch):
 def test_a_short_text_layer_is_kept_when_ocr_finds_nothing_better():
     """A cover page with one word is under TEXT_MIN and goes to OCR like a
     scan; with no OCR available its own text must still come back."""
-    r = pdfread.read_pages(build_pdf(["Melléklet"]))
-    assert r["sources"] == {0: "text-layer"} and r["texts"][0] == "Melléklet"
+    r = pdfread.read_pages(build_pdf(["Appendix"]))
+    assert r["sources"] == {0: "text-layer"} and r["texts"][0] == "Appendix"
 
 
 def test_errors():

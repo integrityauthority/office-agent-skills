@@ -1,10 +1,10 @@
 ---
 name: m365-graph
-description: Search and read the organisation's Microsoft 365 content — Outlook mail, SharePoint and OneDrive documents, Teams chats, the user's calendar — through Microsoft Graph with the signed-in user's own delegated permissions. List the signed-in user's OneDrive with /me/drive/root/children, open a folder from that list, and read a Word, Excel or PDF file with /me/drive/items/<id>/content. Use when the user asks to find something that lives in the cloud rather than on this machine ("keresd meg a levelet", "mi van a OneDrive-omon", "mit ír a dokumentum"). Do NOT use for a document the user has OPEN in Word/Excel/PowerPoint — that is the office-live skill. Do NOT use for local files.
+description: Search and read the organisation's Microsoft 365 content — Outlook mail, SharePoint and OneDrive documents, Teams chats, the user's calendar — through Microsoft Graph with the signed-in user's own delegated permissions. List the signed-in user's OneDrive with /me/drive/root/children, open a folder from that list, and read a Word, Excel or PDF file with /me/drive/items/<id>/content. Use when the user asks to find something that lives in the cloud rather than on this machine ("find the email about", "what is on my OneDrive", "what does the document say"). Do NOT use for a document the user has OPEN in Word/Excel/PowerPoint — that is the office-live skill. Do NOT use for local files.
 license: MIT
 compatibility: Windows (the token cache uses DPAPI); Python with msal and requests; a Microsoft 365 work or school account. OCR settings are in the repository README.
 metadata:
-  version: "3.0.0"
+  version: "3.0.1"
   author: Integritás Hatóság
 ---
 
@@ -95,11 +95,11 @@ covers chats but not channel posts.
 ### Search everything
 
 ```
-mg search --query "beszerzési eljárás 2026"
-mg search --query "költségvetés" --types driveItem,listItem --top 25
+mg search --query "procurement procedure 2026"
+mg search --query "budget" --types driveItem,listItem --top 25
 mg search --query "from:someone@example.org contract" --types message
-mg search --query "filetype:xlsx negyedéves" --types driveItem
-mg search --query "határidő" --types chatMessage
+mg search --query "filetype:xlsx quarterly" --types driveItem
+mg search --query "deadline" --types chatMessage
 ```
 
 Types: `message` (mail), `driveItem`/`listItem`/`site` (OneDrive+SharePoint),
@@ -188,7 +188,7 @@ import sys
 sys.path.insert(0, r"${HERMES_SKILL_DIR}/scripts")
 from microsoft_graph import graph, search, GraphError
 
-hits = search("beszerzés 2026", types=["driveItem"], top=10)
+hits = search("procurement 2026", types=["driveItem"], top=10)
 for h in hits["hits"]:
     print(h["name"], h.get("location"), h.get("link"))
 
@@ -221,8 +221,8 @@ sends invitations to real people the moment it is created, and that cannot be
 taken back.
 
 ```
-mg calendar add --subject "Egyeztetés" --start 2026-08-26T10:00:00 \
-                --end 2026-08-26T11:00:00 --location "Nagy tárgyaló"
+mg calendar add --subject "Review meeting" --start 2026-08-26T10:00:00 \
+                --end 2026-08-26T11:00:00 --location "Main meeting room"
 ```
 
 Add `--attendees a@b.hu,c@d.hu` only when the user asked for invitations by

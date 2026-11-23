@@ -152,7 +152,7 @@ def _utf8_stdout():
     """Force UTF-8 on stdout.
 
     Python on Windows writes stdout in the console codepage, which is cp852
-    here: an em-dash in a hint comes out as '?', and a Hungarian accent in a
+    here: an em-dash in a hint comes out as '?', and an accented letter in a
     document title raises UnicodeEncodeError mid-print, so the caller gets
     half a JSON object and a traceback.
     """

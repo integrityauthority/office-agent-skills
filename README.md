@@ -211,6 +211,14 @@ Write the `SKILL.md` for the agent, not for a person. An instruction phrased as
 advice to a human reader ("export your token first") is read as an instruction
 to the agent, which will then ask the user for something it already has.
 
+Write everything in English: instructions, descriptions and trigger phrases,
+code comments, examples, sample mails and documents, and test fixtures —
+names like John Smith, addresses at example.com, a search for "budget". The
+skills work in any language the user speaks; the repository is read by people
+everywhere. Non-English text belongs only where it is the point, such as a
+test that a Central European code page or an `ő` comes through intact; say so
+in a comment there.
+
 ## Publishing
 
 A playbook is the distribution channel. Link this repository to one, push, and

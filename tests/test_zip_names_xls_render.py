@@ -30,7 +30,7 @@ def legacy_zip(names, codepage):
             placeholder = f"{n:03d}".encode() + b"#" * (len(raw) - 3)
             assert len(placeholder) == len(raw)
             placeholders[placeholder] = raw
-            z.writestr(placeholder.decode("ascii"), f"tartalom {n}".encode())
+            z.writestr(placeholder.decode("ascii"), f"content {n}".encode())
     data = buf.getvalue()
     for placeholder, raw in placeholders.items():
         assert data.count(placeholder) == 2      # local header and central directory
@@ -38,7 +38,9 @@ def legacy_zip(names, codepage):
     return data
 
 
-HUNGARIAN = ["Új_bejelentések/levél.txt", "Árvíztűrő tükörfúrógép.txt", "őrző értesítése.txt"]
+# Encoding test case: names with Central European letters (ő, ű) that a DOS
+# or Windows archiver stores in cp852 or cp1250.
+CENTRAL_EUROPEAN = ["Győr_reports/résumé.txt", "Erdős and Szűcs minutes.txt", "Kecskemét office notice.txt"]
 
 
 @pytest.fixture(autouse=True)
@@ -48,51 +50,51 @@ def default_encoding(monkeypatch):
 
 @pytest.mark.parametrize("codepage", ["cp852", "cp1250"])
 def test_dos_names_come_back_with_their_accents(codepage):
-    members, total = archive.list_members(legacy_zip(HUNGARIAN, codepage))
+    members, total = archive.list_members(legacy_zip(CENTRAL_EUROPEAN, codepage))
     assert total == 3
-    assert [m["name"] for m in members] == HUNGARIAN
+    assert [m["name"] for m in members] == CENTRAL_EUROPEAN
 
 
 def test_utf8_names_without_the_flag_are_read_as_utf8():
-    data = legacy_zip(HUNGARIAN, "utf-8")
-    assert [m["name"] for m in archive.list_members(data)[0]] == HUNGARIAN
+    data = legacy_zip(CENTRAL_EUROPEAN, "utf-8")
+    assert [m["name"] for m in archive.list_members(data)[0]] == CENTRAL_EUROPEAN
 
 
 def test_flagged_and_ascii_names_are_left_alone():
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as z:
-        z.writestr("Árvíztűrő.txt", b"x")          # Python sets the UTF-8 flag
+        z.writestr("Zürich café.txt", b"x")          # Python sets the UTF-8 flag
         z.writestr("plain/name.txt", b"y")
-    assert [m["name"] for m in archive.list_members(buf.getvalue())[0]] == ["Árvíztűrő.txt", "plain/name.txt"]
+    assert [m["name"] for m in archive.list_members(buf.getvalue())[0]] == ["Zürich café.txt", "plain/name.txt"]
 
 
 def test_one_fixed_code_page_can_be_forced(monkeypatch):
-    data = legacy_zip(["bejelentés.txt"], "cp1250")
+    data = legacy_zip(["résumé.txt"], "cp1250")
     monkeypatch.setenv("ZIP_NAME_ENCODING", "cp852")
-    assert archive.list_members(data)[0][0]["name"] == "bejelentÚs.txt"
+    assert archive.list_members(data)[0][0]["name"] == "rÚsumÚ.txt"      # cp1250 bytes read as cp852
     monkeypatch.setenv("ZIP_NAME_ENCODING", "cp1250")
-    assert archive.list_members(data)[0][0]["name"] == "bejelentés.txt"
+    assert archive.list_members(data)[0][0]["name"] == "résumé.txt"
     monkeypatch.setenv("ZIP_NAME_ENCODING", "no-such-codepage")
-    assert archive.list_members(data)[0][0]["name"] == "bejelentés.txt"
+    assert archive.list_members(data)[0][0]["name"] == "résumé.txt"
 
 
 def test_read_member_by_accented_name_and_unpack(tmp_path):
-    data = legacy_zip(HUNGARIAN, "cp852")
-    name, payload = archive.read_member(data, "levél.txt")
-    assert name == "levél.txt" and payload == b"tartalom 0"
-    source = tmp_path / "Új_bejelentések 10.02.zip"
+    data = legacy_zip(CENTRAL_EUROPEAN, "cp852")
+    name, payload = archive.read_member(data, "résumé.txt")
+    assert name == "résumé.txt" and payload == b"content 0"
+    source = tmp_path / "Győr_reports 10.02.zip"
     source.write_bytes(data)
-    result = archive.unpack(source, tmp_path / "ki")
+    result = archive.unpack(source, tmp_path / "out")
     assert result["count"] == 3
-    assert (tmp_path / "ki" / "Új_bejelentések" / "levél.txt").read_bytes() == b"tartalom 0"
-    assert (tmp_path / "ki" / "őrző értesítése.txt").is_file()
+    assert (tmp_path / "out" / "Győr_reports" / "résumé.txt").read_bytes() == b"content 0"
+    assert (tmp_path / "out" / "Erdős and Szűcs minutes.txt").is_file()
 
 
 def test_file_read_lists_the_accented_names(tmp_path):
-    path = tmp_path / "csomag.zip"
-    path.write_bytes(legacy_zip(HUNGARIAN, "cp852"))
+    path = tmp_path / "bundle.zip"
+    path.write_bytes(legacy_zip(CENTRAL_EUROPEAN, "cp852"))
     r = ok(files.run(files.read_file, path))
-    assert [m["name"] for m in r["members"]] == HUNGARIAN
+    assert [m["name"] for m in r["members"]] == CENTRAL_EUROPEAN
 
 
 # ------------------------------------------------------------------ .xls ---
@@ -100,15 +102,15 @@ def test_file_read_lists_the_accented_names(tmp_path):
 def make_xls():
     xlwt = pytest.importorskip("xlwt")
     book = xlwt.Workbook(encoding="utf-8")
-    sheet = book.add_sheet("Adatok")
-    for col, value in enumerate(["Név", "Terület", "Kelte"]):
+    sheet = book.add_sheet("Data")
+    for col, value in enumerate(["Name", "Area", "Dated"]):
         sheet.write(0, col, value)
-    sheet.write(1, 0, "Árvíztűrő Kft.")
+    sheet.write(1, 0, "Café Zürich Ltd.")
     sheet.write(1, 1, 1234)
     sheet.write(1, 2, datetime.date(2026, 10, 3), xlwt.easyxf(num_format_str="YYYY-MM-DD"))
-    sheet.write(2, 0, "tükörfúrógép")
+    sheet.write(2, 0, "crème brûlée")
     sheet.write(2, 1, 12.5)
-    book.add_sheet("Üres")
+    book.add_sheet("Résumés")
     buf = io.BytesIO()
     book.save(buf)
     return buf.getvalue()
@@ -116,32 +118,32 @@ def make_xls():
 
 def test_xls_is_read_like_xlsx(tmp_path):
     pytest.importorskip("xlrd")
-    path = tmp_path / "pénzügyi szolgáltatók.xls"
+    path = tmp_path / "café suppliers.xls"
     path.write_bytes(make_xls())
     r = ok(files.run(files.read_file, path))
     assert r["kind"] == "xls"
-    assert r["sheets"] == ["Adatok", "Üres"]
-    assert "Árvíztűrő Kft.\t1234\t2026-10-03" in r["text"]
-    assert "tükörfúrógép\t12.5" in r["text"]
+    assert r["sheets"] == ["Data", "Résumés"]
+    assert "Café Zürich Ltd.\t1234\t2026-10-03" in r["text"]
+    assert "crème brûlée\t12.5" in r["text"]
 
 
 def test_xls_is_detected_without_its_extension():
     pytest.importorskip("xlrd")
-    assert files.detect_kind(make_xls(), "melleklet.bin") == "xls"
+    assert files.detect_kind(make_xls(), "attachment.bin") == "xls"
 
 
 def test_xls_is_searched_with_sheet_and_row(tmp_path):
     pytest.importorskip("xlrd")
-    path = tmp_path / "lista.xls"
+    path = tmp_path / "list.xls"
     path.write_bytes(make_xls())
-    r = ok(files.run(files.find_in_files, path, "tukorfurogep"))
+    r = ok(files.run(files.find_in_files, path, "creme brulee"))
     assert r["hit_count"] == 1
-    assert r["hits"][0]["where"] == "sheet Adatok, row 3"
+    assert r["hits"][0]["where"] == "sheet Data, row 3"
 
 
 def test_damaged_xls_gives_a_hint(tmp_path):
     pytest.importorskip("xlrd")
-    path = tmp_path / "rossz.xls"
+    path = tmp_path / "damaged.xls"
     path.write_bytes(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x00" * 600)
     r = json.loads(files.run(files.read_file, path))
     assert r["ok"] is False and r["hint"]
@@ -160,8 +162,8 @@ def test_parse_box_accepts_fractions_and_refuses_the_rest():
 
 def test_render_box_crops_the_region_at_a_higher_resolution(tmp_path):
     from PIL import Image
-    path = tmp_path / "vn.pdf"
-    path.write_bytes(build_pdf(["Vagyonnyilatkozat 1. oldal", "2. oldal"]))
+    path = tmp_path / "declaration.pdf"
+    path.write_bytes(build_pdf(["Asset declaration, page 1", "Page 2"]))
     whole = files.render_pages(path, pages="1", dpi=72)
     part = files.render_pages(path, pages="1", box="0,0.5,0.5,1")
     assert part["dpi"] == files.RENDER_BOX_DPI
@@ -182,7 +184,7 @@ def test_render_caps_the_resolution(tmp_path):
 
 def test_render_reads_a_picture(tmp_path):
     from PIL import Image
-    path = tmp_path / "kepernyokep.png"
+    path = tmp_path / "screenshot.png"
     Image.new("RGB", (400, 200), "white").save(path)
     r = files.render_pages(path, box="0,0,0.5,1")
     assert len(r["images"]) == 1

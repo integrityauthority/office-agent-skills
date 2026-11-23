@@ -50,9 +50,9 @@ def test_file_connector_registers_and_dispatches(tmp_path):
                               "file_collect", "file_unpack"}
     assert ctx.skills == ["file-reader"]
     pdf = tmp_path / "a.pdf"
-    pdf.write_bytes(build_pdf(["Az összeférhetetlenségi szabályok szövege"]))
+    pdf.write_bytes(build_pdf(["The full text of the café opening rules"]))
     # Hermes calls handler(args_dict, **context); the dict comes positionally.
-    found = json.loads(ctx.tools["file_find"]({"path": str(pdf), "query": "szabalyok"}, task_id="t"))
+    found = json.loads(ctx.tools["file_find"]({"path": str(pdf), "query": "cafe"}, task_id="t"))
     assert found["ok"] and found["hit_count"] == 1
     read = json.loads(ctx.tools["file_read"]({"path": str(pdf)}, task_id="t", session_id="s"))
     assert read["ok"] and read["page_sources"] == {"text-layer": "1"}

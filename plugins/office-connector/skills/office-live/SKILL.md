@@ -1,10 +1,10 @@
 ---
 name: office-live
-description: Work live in the user's running Microsoft Office on Windows over COM — read and edit the OPEN Word, Excel or PowerPoint document, and in classic Outlook search and read mail, compose new mail, replies and forwards with attachments, and use contacts and the calendar. Use when the user refers to "this document", "the open file", "my selection", "my inbox", "reply to that email", "my calendar", or wants work done in place rather than as a new file; when asked to open Word or Excel, start it and open the document there. Outlook items are composed and shown for review — this skill never sends or saves mail. Non-ASCII text, including Hungarian, goes through office_exec only, never computer-use typing or a .vbs/.ps1 script, which corrupt it. Do NOT use to generate a document from scratch (write a .docx/.xlsx/.pptx file instead), and do NOT use on non-Windows machines.
+description: Work live in the user's running Microsoft Office on Windows over COM — read and edit the OPEN Word, Excel or PowerPoint document, and in classic Outlook search and read mail, compose new mail, replies and forwards with attachments, and use contacts and the calendar. Use when the user refers to "this document", "the open file", "my selection", "my inbox", "reply to that email", "my calendar", or wants work done in place rather than as a new file; when asked to open Word or Excel, start it and open the document there. Outlook items are composed and shown for review — this skill never sends or saves mail. Non-ASCII text (accented letters, dashes) goes through office_exec only, never computer-use typing or a .vbs/.ps1 script, which corrupt it. Do NOT use to generate a document from scratch (write a .docx/.xlsx/.pptx file instead), and do NOT use on non-Windows machines.
 license: MIT
 compatibility: Windows with Microsoft Office desktop (Word, Excel, PowerPoint, classic Outlook) and Python with pywin32.
 metadata:
-  version: "2.4.4"
+  version: "2.4.5"
   author: Integritás Hatóság
 ---
 
@@ -45,14 +45,14 @@ tells you to come back here.)
 
 ## Text encoding
 
-Hungarian and every other non-ASCII character must be an ordinary Python
+Accented letters and every other non-ASCII character must be an ordinary Python
 string inside `office_exec`. COM receives that string as Unicode, so `á`,
 `ő` and an en dash arrive in Word unchanged.
 
 Do **not** write a `.vbs`, `.js`, `.wsf` or `.ps1` and run it with `cscript`,
 `wscript` or PowerShell, and do **not** type the document body with
 `computer-use`. Windows Script Host reads a UTF-8 file as the system ANSI
-code page (Windows-1250 on a Hungarian PC). The UTF-8 bytes of `á` (`C3 A1`)
+code page (Windows-1250 on a Central European PC). The UTF-8 bytes of `á` (`C3 A1`)
 become `Ăˇ`, and an en dash becomes `â€“`. A UTF-8 BOM does not fix this.
 `cscript` only treats a file as Unicode when it is UTF-16 LE with a BOM, and
 that route is still the wrong one: stay on `office_exec`.
@@ -83,10 +83,10 @@ sys.path.insert(0, r"${HERMES_SKILL_DIR}/scripts")
 from office import attach, OfficeError
 
 app, doc = attach("word")          # "word" | "excel" | "ppt"
-                                   # attach("excel", name="jelentes") picks by name
+                                   # attach("excel", name="report") picks by name
 doc.TrackRevisions = True
 f = doc.Content.Find
-f.Text, f.Replacement.Text = "régi szöveg", "új szöveg"
+f.Text, f.Replacement.Text = "old text", "new text"
 f.Execute(Replace=2)               # 2 = wdReplaceAll
 print(doc.Content.Text[-300:])     # verify in the SAME call
 ```
@@ -136,11 +136,12 @@ document. Once the document has been saved or closed, `new_doc` may open
 another. If an earlier attempt left partial text, replace the body before
 writing again (`doc.Content.Delete()` in Word) so the new text is not appended
 beside the old. Do not set a table style by name; `Table Grid` does not exist
-in Hungarian Word. Turn borders on with `table.Borders.Enable = 1`.
+in a Word in another language. Turn borders on with `table.Borders.Enable = 1`.
 
-Word style names are localized. Hungarian Word has no style named `Title`,
-`Heading 1` or `Table Grid`, and assigning those names raises
-"A megadott nevű elem nem létezik" after the document already exists. Set a
+Word style names are localized. A Word in another language has no style
+named `Title`, `Heading 1` or `Table Grid`, and assigning those names raises
+"The requested member of the collection does not exist" (in the local
+language) after the document already exists. Set a
 style by its built-in id: `-63` title, `-75` subtitle, `-2` heading 1,
 `-3` heading 2, `-1` normal. Leave a table on the default style.
 
@@ -148,7 +149,7 @@ style by its built-in id: `-63` title, `-75` subtitle, `-2` heading 1,
 app, doc = new_doc("word", launch=True)
 sel = doc.Content
 sel.Style = -63
-sel.TypeText("Cím\n")
+sel.TypeText("Title\n")
 # on a later retry this same call returns the document above
 ```
 
@@ -216,10 +217,10 @@ from office import attach, replace_all, probe
 
 app, doc = attach("word")
 doc.TrackRevisions = True
-rows = replace_all(doc, [("Kovács János", "[SZEMÉLY-1]"),
-                         ("1234567890",  "[ADÓAZONOSÍTÓ]")])
+rows = replace_all(doc, [("John Smith", "[PERSON-1]"),
+                         ("1234567890", "[TAX-ID]")])
 print(rows)
-# [{'old': 'Kovács János', 'visible_before': 67, 'visible_after': 0,
+# [{'old': 'John Smith', 'visible_before': 67, 'visible_after': 0,
 #   'replaced': 67, 'in_revisions': 67, 'inserted': 67,
 #   'found': True, 'long_pattern': False, 'complete': True}, ...]
 ```
@@ -241,14 +242,14 @@ With tracking on, a replacement does **not** remove the old text: Word keeps
 those characters and marks them as a deletion revision. They are still in
 `Range.Text`. Counting raw text therefore reports `before=1, after=1,
 replaced=0` for an edit that plainly worked, and the document reads
-`régi szövegúj szöveg` because the struck-out old text sits next to the new.
+`old textnew text` because the struck-out old text sits next to the new.
 
 That is expected, not a bug. Verify against the **accepted** view instead:
 
 ```python
 from office import final_text
-"Kovács János" in doc.Content.Text          # True — the deletion mark
-"Kovács János" in final_text(doc.Content)   # False — what the reader will see
+"John Smith" in doc.Content.Text          # True — the deletion mark
+"John Smith" in final_text(doc.Content)   # False — what the reader will see
 ```
 
 `count_text(doc, needle, accepted=False)` counts raw characters if you ever
@@ -286,7 +287,7 @@ before = probe(doc)
 doc.TrackRevisions = True
 touched = []
 for i, para in enumerate(doc.Paragraphs, 1):
-    if "Címsor" in para.Style.NameLocal and not para.Range.Text.strip().endswith(":"):
+    if para.OutlineLevel < 10 and not para.Range.Text.strip().endswith(":"):   # a heading, in any language
         para.Range.InsertAfter(":")
         touched.append(i)
 after = probe(doc)
@@ -410,13 +411,13 @@ doc.Content.Text                              # full text
 [(r.Type, r.Author, r.Range.Text) for r in doc.Revisions]   # 1=insert 2=delete
 
 f = doc.Content.Find                          # targeted replace
-f.Text, f.Replacement.Text = "régi", "új"
+f.Text, f.Replacement.Text = "old", "new"
 f.Execute(Replace=2)
 
 doc.Paragraphs(12).Range.InsertParagraphAfter()      # insert (see gotcha above)
-doc.Paragraphs(13).Range.Text = "Új bekezdés."
+doc.Paragraphs(13).Range.Text = "A new paragraph."
 
-doc.Comments.Add(doc.Paragraphs(4).Range, "Ez pontosításra szorul.")
+doc.Comments.Add(doc.Paragraphs(4).Range, "This needs clarifying.")
 
 # FOOTNOTE — always name the arguments. Positional silently corrupts:
 # Footnotes.Add(rng, "Ket. 44. par.") puts the string in the Type slot and
@@ -437,7 +438,7 @@ ws.Range("A1:D50").Value                      # values (2D tuple)
 ws.Range("A1:D50").Formula                    # formulas instead
 
 ws.Range("B2").Value = 42                     # single cell
-ws.Range("A5:C5").Value = [["Összesen", 3, 9]]   # a row: 2D list
+ws.Range("A5:C5").Value = [["Total", 3, 9]]   # a row: 2D list
 ws.Range("C10").Formula = "=SUM(C2:C9)"
 
 hdr = ws.Range("A1:D1")                       # formatting
@@ -458,8 +459,8 @@ app, pres = attach("ppt")
  for s in pres.Slides if s.Shapes.HasTitle]
 
 s = pres.Slides(4)
-s.Shapes(1).TextFrame.TextRange.Text = "Új cím"
-s.NotesPage.Shapes.Placeholders(2).TextFrame.TextRange.Text = "Előadói jegyzet."
+s.Shapes(1).TextFrame.TextRange.Text = "New title"
+s.NotesPage.Shapes.Placeholders(2).TextFrame.TextRange.Text = "Speaker note."
 pres.Slides.AddSlide(pres.Slides.Count + 1, pres.SlideMaster.CustomLayouts(2))
 ```
 
@@ -481,32 +482,32 @@ status()["outlook"]                    # running? accounts, unread, drafts
 
 # search — summaries only, newest first, no bodies (they are large and private)
 find_mail(since_days=7)
-find_mail(query="hiánypótlás", since_days=30)
-find_mail(sender="kovacs", unread=True)          # name OR e-mail address
+find_mail(query="missing documents", since_days=30)
+find_mail(sender="smith", unread=True)          # name OR e-mail address
 find_mail(folder_name="sent", since="2026-10-01", until="2026-10-15")
 get_mail(entry_id, max_chars=4000)               # one message, with body
 current_mail()                                   # what the user has selected/open
 
 # compose — opened for the user, NOT sent
-new_mail(to=["kovacs.janos@pelda.hu"], subject="Hiánypótlás",
-         html="<p>Tisztelt Kovács Úr!</p><p>A <b>15 napos</b> határidő ...</p>"
-              "<ul><li>első</li><li>második</li></ul>",
-         attachments=[r"C:\...\felhivas.pdf"])
-reply(entry_id, body="Köszönöm, megnézem.")      # text goes ABOVE the quote
+new_mail(to=["john.smith@example.org"], subject="Missing documents",
+         html="<p>Dear Mr Smith,</p><p>The <b>15-day</b> deadline ...</p>"
+              "<ul><li>first</li><li>second</li></ul>",
+         attachments=[r"C:\...\request.pdf"])
+reply(entry_id, body="Thanks, I will take a look.")      # text goes ABOVE the quote
 reply(entry_id, html="...", reply_all=True)
-forward(entry_id, to="x@pelda.hu", body="Továbbítom.")
-add_attachment(item, r"C:\...\melleklet.docx")
+forward(entry_id, to="x@example.org", body="FYI.")
+add_attachment(item, r"C:\...\annex.docx")
 readback(item)                                   # what it really contains
 
 # calendar — read freely, compose meetings for the user to send
 calendar(days=7)                                 # recurring meetings expanded
-new_appointment("Egyeztetés", "2026-11-13 10:00", minutes=45,
-                location="Tárgyaló", attendees=["kovacs.janos@pelda.hu"])
+new_appointment("Review meeting", "2026-11-13 10:00", minutes=45,
+                location="Meeting room 2", attendees=["john.smith@example.org"])
 
 # contacts
-resolve("Kovács János")          # address book (GAL) -> {"name", "email"}
-find_contact("Kovács")           # Contacts folder + address book
-new_contact("Teszt Elek", email="...", company="...")
+resolve("John Smith")            # address book (GAL) -> {"name", "email"}
+find_contact("Smith")            # Contacts folder + address book
+new_contact("Test User", email="...", company="...")
 ```
 
 Formatting: pass `html=` for anything beyond plain paragraphs — bold, lists,
@@ -521,8 +522,8 @@ resolved to, `unresolved` names, attachments, the start of the text, and
 AND proves:
 
 ```python
-m = new_mail(to="Lovas Dóra", subject="...", html="...", attachments=[...])
-m        # -> {"recipients": [{"name": "Lovas Dóra dr.", "email": "dora.lovas@...",
+m = new_mail(to="Jane Doe", subject="...", html="...", attachments=[...])
+m        # -> {"recipients": [{"name": "Dr Jane Doe", "email": "jane.doe@...",
          #     "resolved": true}], "unresolved": [], "attachments": [...], ...}
 ```
 
@@ -534,7 +535,7 @@ Things that will bite:
 
 - **Names are fine in `to=` — check what they resolved to.** The readback shows
   the address each name landed on. If `unresolved` is not empty, or an address
-  is not the person the user meant (two Kovácses), say so and ask; do not
+  is not the person the user meant (two Smiths), say so and ask; do not
   guess. `resolve(name)` is there when you need the address before composing.
 - **Outlook collections are not callable**: `item.Recipients.Item(1)`, not
   `item.Recipients(1)` (TypeError under early binding).
