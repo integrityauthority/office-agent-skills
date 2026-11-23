@@ -19,7 +19,7 @@ variables are listed in the repository README under "Configuration".
 
 Libraries, all permissive: pypdfium2 (Apache/BSD) for PDF text and
 rendering, pdfminer.six (MIT) as a text fallback, olefile (BSD) for .msg,
-openpyxl (MIT) for .xlsx. Word and PowerPoint are read from their XML with the
+openpyxl (MIT) for .xlsx, xlrd (BSD) for Excel 97-2003 .xls. Word and PowerPoint are read from their XML with the
 standard library. Each one is optional; a missing one is named in the answer.
 """
 from __future__ import annotations
@@ -177,6 +177,8 @@ def detect_kind(data: bytes, name: str = "") -> str:
     if data.startswith(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"):
         if ext == ".msg" or msgfile.is_msg(data):
             return "msg"
+        if ext in (".xls", ".xlt") or _ole_has_workbook(data):
+            return "xls"
         return "legacy-office"
     if data.startswith(b"PK\x03\x04"):
         try:
@@ -291,7 +293,52 @@ def read_image(data, pages=None, ocr="auto", max_chars=TEXT_LIMIT):
     return result
 
 
-def render_pdf_pages(data, pages="1", dpi=150, stem="document"):
+RENDER_MAX_DPI = 600
+RENDER_BOX_DPI = 300
+
+
+def parse_box(box):
+    """A region of the page as (left, top, right, bottom) fractions of its
+    width and height, measured from the top-left corner: '0,0.5,1,1' is the
+    lower half. None for the whole page."""
+    if box in (None, "", []):
+        return None
+    if isinstance(box, str):
+        parts = [p for p in re.split(r"[,;\s]+", box.strip()) if p]
+    else:
+        parts = list(box)
+    try:
+        values = [float(p) for p in parts]
+    except (TypeError, ValueError) as exc:
+        raise FileError(f"box must be four numbers, got {box!r}",
+                        "Pass left,top,right,bottom as fractions of the page, e.g. '0,0.5,1,1'.") from exc
+    if len(values) != 4:
+        raise FileError(f"box must be four numbers, got {box!r}",
+                        "Pass left,top,right,bottom as fractions of the page, e.g. '0,0.5,1,1'.")
+    left, top, right, bottom = values
+    if not (0 <= left < right <= 1 and 0 <= top < bottom <= 1):
+        raise FileError(f"box {box!r} is not inside the page",
+                        "Each value is between 0 and 1, and left < right, top < bottom.")
+    return left, top, right, bottom
+
+
+def _crop_png(png, box):
+    from PIL import Image
+    image = Image.open(io.BytesIO(png))
+    width, height = image.size
+    left, top, right, bottom = box
+    region = image.crop((round(left * width), round(top * height), round(right * width), round(bottom * height)))
+    buffer = io.BytesIO()
+    region.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def render_pdf_pages(data, pages="1", dpi=150, stem="document", box=None):
+    """PNG files of PDF pages. With box, only that region of each page, at a
+    higher resolution unless dpi says otherwise: a close look at a digit."""
+    region = parse_box(box)
+    dpi = int(dpi or (RENDER_BOX_DPI if region else 150))
+    dpi = max(36, min(dpi, RENDER_MAX_DPI))
     doc = pdfread.open_pdf(data)
     if doc is None:
         raise FileError("rendering needs pypdfium2", "pip install pypdfium2")
@@ -300,10 +347,18 @@ def render_pdf_pages(data, pages="1", dpi=150, stem="document"):
         folder = _cache_dir("render")
         out = []
         for index in selected:
-            target = folder / f"{_safe_name(stem)}-p{index + 1}.png"
-            target.write_bytes(pdfread.render_png(doc, index, dpi))
-            out.append({"page": index + 1, "png": str(target)})
-        return {"page_count": len(doc), "images": out}
+            png = pdfread.render_png(doc, index, dpi)
+            suffix = ""
+            if region:
+                png = _crop_png(png, region)
+                suffix = "-box" + "-".join(f"{int(v * 100):02d}" for v in region)
+            target = folder / f"{_safe_name(stem)}-p{index + 1}{suffix}.png"
+            target.write_bytes(png)
+            row = {"page": index + 1, "png": str(target)}
+            if region:
+                row["box"] = list(region)
+            out.append(row)
+        return {"page_count": len(doc), "dpi": dpi, "images": out}
     finally:
         doc.close()
 
@@ -553,6 +608,95 @@ def read_pptx(data, max_chars=TEXT_LIMIT):
     return {"kind": "pptx", "slide_count": len(order), "text": text, "truncated": truncated}
 
 
+def _ole_has_workbook(data):
+    """True when an OLE file holds an Excel 97-2003 workbook stream."""
+    try:
+        import olefile
+    except ImportError:
+        return False
+    try:
+        ole = olefile.OleFileIO(data)
+    except Exception:
+        return False
+    try:
+        return ole.exists("Workbook") or ole.exists("Book")
+    finally:
+        ole.close()
+
+
+def _xls_book(data):
+    try:
+        import xlrd
+    except ImportError as exc:
+        raise FileError("reading .xls needs xlrd", "pip install xlrd") from exc
+    try:
+        return xlrd, xlrd.open_workbook(file_contents=data, on_demand=True)
+    except Exception as exc:     # xlrd raises XLRDError, CompDocError and plain struct errors
+        if "encrypt" in str(exc).lower():
+            raise FileError("the .xls is password-protected", "Ask the user for an unprotected copy.") from exc
+        raise FileError(f"the .xls could not be read ({type(exc).__name__}: {exc})",
+                        "Open it with office-live: doc = open_doc(path), then read it there.") from exc
+
+
+def _xls_cell(xlrd, book, cell):
+    if cell.ctype == xlrd.XL_CELL_EMPTY or cell.ctype == xlrd.XL_CELL_BLANK:
+        return ""
+    if cell.ctype == xlrd.XL_CELL_DATE:
+        try:
+            value = xlrd.xldate_as_datetime(cell.value, book.datemode)
+        except Exception:
+            return str(cell.value)
+        return value.date().isoformat() if value.time() == value.min.time() else value.isoformat(sep=" ")
+    if cell.ctype == xlrd.XL_CELL_NUMBER and float(cell.value).is_integer():
+        return str(int(cell.value))
+    if cell.ctype == xlrd.XL_CELL_BOOLEAN:
+        return "TRUE" if cell.value else "FALSE"
+    if cell.ctype == xlrd.XL_CELL_ERROR:
+        return xlrd.error_text_from_code.get(cell.value, "#ERROR")
+    return str(cell.value).replace("\n", " ").strip()
+
+
+def _xls_rows(data, max_rows=XLSX_MAX_ROWS, max_cols=XLSX_MAX_COLS, max_sheets=XLSX_MAX_SHEETS):
+    """(sheet names, [(sheet, row number, cells)], clipped) of an Excel 97-2003 workbook."""
+    xlrd, book = _xls_book(data)
+    rows, clipped = [], False
+    try:
+        names = list(book.sheet_names())
+        for index, name in enumerate(names[:max_sheets]):
+            sheet = book.sheet_by_index(index)
+            if sheet.nrows > max_rows or sheet.ncols > max_cols:
+                clipped = True
+            for r in range(min(sheet.nrows, max_rows)):
+                cells = [_xls_cell(xlrd, book, sheet.cell(r, c)) for c in range(min(sheet.ncols, max_cols))]
+                if any(cells):
+                    rows.append((name, r + 1, cells))
+            book.unload_sheet(index)
+    finally:
+        book.release_resources()
+    return names, rows, clipped
+
+
+def read_xls(data, max_chars=TEXT_LIMIT):
+    """An Excel 97-2003 .xls workbook, read with xlrd (BSD), in the same shape
+    as read_xlsx. Values only: formulas show their last computed result."""
+    names, rows, clipped = _xls_rows(data)
+    parts = []
+    for name in names[:XLSX_MAX_SHEETS]:
+        lines = ["\t".join(cells).rstrip() for sheet, _, cells in rows if sheet == name]
+        parts.append(f"--- sheet {name} ---\n" + "\n".join(lines))
+    notes = []
+    if len(names) > XLSX_MAX_SHEETS:
+        notes.append(f"{len(names) - XLSX_MAX_SHEETS} further sheet(s) not shown.")
+    if clipped:
+        notes.append(f"Each sheet is clipped to {XLSX_MAX_ROWS} rows and {XLSX_MAX_COLS} columns; "
+                     "use office-live for the rest.")
+    text, truncated = _clip("\n\n".join(parts), max_chars)
+    result = {"kind": "xls", "sheets": names, "text": text, "truncated": truncated}
+    if notes:
+        result["notes"] = notes
+    return result
+
+
 def read_xlsx(data, max_chars=TEXT_LIMIT):
     try:
         from openpyxl import load_workbook
@@ -607,6 +751,8 @@ def _read_bytes(data, name, kind, pages, ocr, max_chars):
         return read_docx(data, max_chars)
     if kind == "xlsx":
         return read_xlsx(data, max_chars)
+    if kind == "xls":
+        return read_xls(data, max_chars)
     if kind == "pptx":
         return read_pptx(data, max_chars)
     if kind == "html":
@@ -620,7 +766,7 @@ def _read_bytes(data, name, kind, pages, ocr, max_chars):
         return {"kind": "text", "text": text, "truncated": truncated}
     if kind == "legacy-office":
         raise FileError(
-            f"{name} is a legacy Office file (.doc, .xls or .ppt)",
+            f"{name} is a legacy Office file (.doc or .ppt)",
             "Open it with office-live: doc = open_doc(path), then read it there.")
     if kind == "zip":
         members, total = archive.list_members(data)
@@ -628,7 +774,7 @@ def _read_bytes(data, name, kind, pages, ocr, max_chars):
                 "next": "Read a member in place with attachment='<index or name>', search inside with "
                         "file_find, or extract with file_unpack."}
     raise FileError(f"{name} is not a format this reader knows ({kind})",
-                    "PDF, images, .msg, .eml, .docx, .xlsx, .pptx, .zip, HTML and text are supported.")
+                    "PDF, images, .msg, .eml, .docx, .xlsx, .xls, .pptx, .zip, HTML and text are supported.")
 
 
 def extract_labels(text, labels):
@@ -679,7 +825,7 @@ def _as_list(value):
 
 # ------------------------------------------------------------------- search ---
 
-SEARCHABLE_EXTENSIONS = {".pdf", ".msg", ".eml", ".docx", ".xlsx", ".pptx", ".zip"} | HTML_EXTENSIONS | TEXT_EXTENSIONS
+SEARCHABLE_EXTENSIONS = {".pdf", ".msg", ".eml", ".docx", ".xlsx", ".xls", ".pptx", ".zip"} | HTML_EXTENSIONS | TEXT_EXTENSIONS
 FIND_MAX_FILES = 300
 FIND_MAX_HITS = 50
 FIND_CONTEXT = 80
@@ -815,6 +961,13 @@ def _search_units(data, name, kind, pages, ocr, meta, prefix="", depth=0):
                         yield f"{prefix}sheet {sheet}, row {number}", "\t".join(cells).rstrip(), False
         finally:
             wb.close()
+        return
+    if kind == "xls":
+        _, rows, clipped = _xls_rows(data, max_rows=FIND_XLSX_MAX_ROWS, max_cols=10 ** 4, max_sheets=10 ** 3)
+        for sheet, number, cells in rows:
+            yield f"{prefix}sheet {sheet}, row {number}", "\t".join(cells).rstrip(), False
+        if clipped:
+            meta["notes"].append(f"{prefix}searched the first {FIND_XLSX_MAX_ROWS} rows of each sheet only.")
         return
     if kind == "pptx":
         text = read_pptx(data, max_chars=10 ** 9)["text"]
@@ -1029,7 +1182,7 @@ def _collect_row(name, data, labels, find, excerpt):
         row["revisions"] = len(details["revisions"])
         if details["checkboxes"]:
             row["checked"] = "; ".join(b["label"][:80] for b in details["checkboxes"] if b["checked"])
-    elif kind in ("xlsx", "pptx", "html", "text"):
+    elif kind in ("xlsx", "xls", "pptx", "html", "text"):
         text = _read_bytes(data, name, kind, None, "never", 10 ** 9).get("text", "")
     else:
         row["error"] = f"{kind} files are not read"
@@ -1195,17 +1348,20 @@ def save_attachments(path, dest=None, which=None, include_inline=False):
     return result
 
 
-def render_pages(path, pages="1", dpi=150, attachment=None):
-    """PDF pages as PNG files, to look at with a vision tool."""
+def render_pages(path, pages="1", dpi=None, attachment=None, box=None):
+    """PDF pages or a picture as PNG files, to look at with a vision tool.
+    box crops each page to a region (fractions from the top-left corner)."""
     p = _resolve(path)
     data = p.read_bytes()
     kind = detect_kind(data, p.name)
     name = p.name
     if attachment not in (None, ""):
         name, data, kind = _pick_attachment(data, kind, attachment)
+    if kind == "image":
+        data, kind = image_as_pdf(data), "pdf"
     if kind != "pdf":
-        raise FileError(f"{name} is not a PDF", "Only PDF pages can be rendered.")
-    result = render_pdf_pages(data, pages=pages, dpi=int(dpi or 150), stem=Path(name).stem)
+        raise FileError(f"{name} is not a PDF or a picture", "Only PDF pages and pictures can be rendered.")
+    result = render_pdf_pages(data, pages=pages, dpi=dpi, stem=Path(name).stem, box=box)
     result["path"] = str(p)
     return result
 
@@ -1223,6 +1379,7 @@ def status():
             "pdf_form_fields": "pypdf" if has("pypdf") else None,
             "msg": "olefile" if has("olefile") else None,
             "xlsx": "openpyxl" if has("openpyxl") else None,
+            "xls": "xlrd" if has("xlrd") else None,
             "docx_pptx_eml_html_text": "standard library",
         },
         **pdfread.describe_settings(),
@@ -1279,7 +1436,8 @@ def main(argv=None):
     g = sub.add_parser("render")
     g.add_argument("path")
     g.add_argument("--pages", default="1")
-    g.add_argument("--dpi", type=int, default=150)
+    g.add_argument("--dpi", type=int, default=None, help="default 150, or 300 with --box")
+    g.add_argument("--box", help="left,top,right,bottom as fractions of the page, e.g. 0,0.5,1,1")
     f = sub.add_parser("find", help="search inside a file or a folder")
     f.add_argument("path")
     f.add_argument("query")
@@ -1319,7 +1477,7 @@ def main(argv=None):
         out = run(save_attachments, args.path, dest=args.dest, which=args.which,
                   include_inline=args.include_inline)
     elif args.command == "render":
-        out = run(render_pages, args.path, pages=args.pages, dpi=args.dpi)
+        out = run(render_pages, args.path, pages=args.pages, dpi=args.dpi, box=args.box)
     else:
         out = run(status)
     emit(json.loads(out))

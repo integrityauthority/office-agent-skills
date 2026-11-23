@@ -1,13 +1,14 @@
 manifest_version: 2
 name: file-connector
-version: 1.6.0
+version: 1.7.0
 description: >-
   Let Hermes read files from disk in one call: PDF and images (scanned pages
   and pictures through OCR), Outlook .msg and .eml e-mails with their
-  attachments, Word, Excel, PowerPoint, HTML and text. Reads an attachment in
-  place, saves attachments to a folder, renders PDF pages for a vision model,
-  reads and safely unpacks .zip archives, and tabulates a folder of letters or
-  documents. Read-only; a page with a text layer never leaves the machine.
+  attachments, Word, Excel (.xlsx and .xls), PowerPoint, HTML and text. Reads
+  an attachment in place, saves attachments to a folder, renders PDF pages and
+  pictures (or one region of them) for a vision model, reads and safely
+  unpacks .zip archives, and tabulates a folder of letters or documents.
+  Read-only; a page with a text layer never leaves the machine.
 author: Integritas Hatosag
 kind: standalone
 
@@ -21,14 +22,16 @@ provides_tools:
 
 # All permissive licences: pypdfium2 (Apache-2.0/BSD-3), pdfminer.six (MIT),
 # pdfplumber (MIT, tables), olefile (BSD-2), openpyxl (MIT), pillow (HPND),
-# pywinrt (MIT), pypdf (BSD-3, PDF form fields). Word, PowerPoint, .eml,
-# .zip, HTML and text are read with the standard library.
+# pywinrt (MIT), pypdf (BSD-3, PDF form fields), xlrd (BSD-3, Excel 97-2003
+# .xls). Word, PowerPoint, .eml, .zip, HTML and text are read with the
+# standard library.
 python_dependencies:
   - pypdfium2
   - pdfminer.six
   - pdfplumber
   - olefile
   - openpyxl
+  - xlrd
   - pillow
   - pypdf
   # Windows OCR on this machine (pywinrt, MIT); Windows only.
@@ -51,3 +54,6 @@ optional_env:
   - OCR_CLOUD_MODEL
   - OCR_CLOUD_API_KEY
   - OCR_CLOUD_API_KEY_ENV
+  # Code page of .zip member names stored without the UTF-8 flag: auto
+  # (default) or one code page such as cp852.
+  - ZIP_NAME_ENCODING

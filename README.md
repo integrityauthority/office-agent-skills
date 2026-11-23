@@ -266,6 +266,7 @@ Windows' own OCR on the machine.
 | `OCR_CLOUD_MODEL` | file-reader, m365-graph | Model or deployment name there. |
 | `OCR_CLOUD_API_KEY` | file-reader, m365-graph | Its key. Sent as `api-key` to `*.azure.com`, as a bearer token elsewhere. |
 | `OCR_CLOUD_API_KEY_ENV` | file-reader, m365-graph | Instead of the key: the name of the variable that already holds it, so a secret your agent has anyway is not copied. |
+| `ZIP_NAME_ENCODING` | file-reader | Code page of `.zip` member names stored without the UTF-8 flag (Windows Explorer and older archivers write the DOS code page). Default `auto`: UTF-8 when the bytes are valid UTF-8, otherwise whichever of `cp852`, `cp1250` and `cp437` reads as letters. Set one code page, such as `cp852`, to use only that one. |
 | `MSGRAPH_CLIENT_ID`, `MSGRAPH_TENANT_ID` | m365-graph | Your own Entra ID application and tenant; see below. |
 
 The OCR order is the same in both skills, cheapest and most private first:
@@ -374,6 +375,7 @@ Nothing third-party is bundled here. At runtime the skills import
 [pdfminer.six](https://github.com/pdfminer/pdfminer.six) (MIT),
 [olefile](https://github.com/decalage2/olefile) (BSD-2),
 [openpyxl](https://foss.heptapod.net/openpyxl/openpyxl) (MIT),
+[xlrd](https://github.com/python-excel/xlrd) (BSD-3),
 [python-docx](https://github.com/python-openxml/python-docx) (MIT) and
 [Pillow](https://github.com/python-pillow/Pillow) (MIT-CMU),
 [pywinrt](https://github.com/pywinrt/pywinrt) (MIT, Windows only), and optionally

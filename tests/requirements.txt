@@ -5,6 +5,9 @@ pdfplumber
 pdfminer.six
 olefile
 openpyxl
+xlrd
+# Writes the .xls test fixtures; not a plugin dependency.
+xlwt
 pillow
 pypdf
 # Windows OCR; the real-engine test is skipped elsewhere.

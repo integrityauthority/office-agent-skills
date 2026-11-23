@@ -1,10 +1,10 @@
 ---
 name: file-reader
-description: Read files on disk as text in one call — PDF and images (scanned pages, photos and screenshots go through OCR), Outlook .msg and .eml e-mails with their attachments, Word .docx, Excel .xlsx, PowerPoint .pptx, HTML and plain text. Search inside a document, an e-mail with its attachments, or a whole folder, with page-level locations. Read an attachment or a .zip member without saving it, save attachments, unpack a .zip safely, tabulate a folder or .zip of letters and documents (sender, date, signers, labelled values), or render PDF pages as images to look at. Use when the user points at a file path or an e-mail file ("olvasd el ezt a PDF-et", "mi van ebben a levélben", "nézd meg a mellékletet", "szkennelt PDF"). Do NOT use for a document the user has OPEN in Word, Excel or PowerPoint, or for mail in the running Outlook — that is office-live. Do NOT use for OneDrive or SharePoint files — that is m365-graph.
+description: Read files on disk as text in one call — PDF and images (scanned pages, photos and screenshots go through OCR), Outlook .msg and .eml e-mails with their attachments, Word .docx, Excel .xlsx and 97-2003 .xls, PowerPoint .pptx, HTML and plain text. Search inside a document, an e-mail with its attachments, or a whole folder, with page-level locations. Read an attachment or a .zip member without saving it, save attachments, unpack a .zip safely, tabulate a folder or .zip of letters and documents (sender, date, signers, labelled values), or render PDF pages and pictures as images to look at, whole or one region enlarged. Use when the user points at a file path or an e-mail file ("olvasd el ezt a PDF-et", "mi van ebben a levélben", "nézd meg a mellékletet", "szkennelt PDF"). Do NOT use for a document the user has OPEN in Word, Excel or PowerPoint, or for mail in the running Outlook — that is office-live. Do NOT use for OneDrive or SharePoint files — that is m365-graph.
 license: MIT
-compatibility: Any OS with Python 3.10+. pypdfium2, pdfplumber, pdfminer.six, olefile, openpyxl, pillow and pypdf give full coverage; OCR settings are in the repository README.
+compatibility: Any OS with Python 3.10+. pypdfium2, pdfplumber, pdfminer.six, olefile, openpyxl, xlrd, pillow and pypdf give full coverage; OCR settings are in the repository README.
 metadata:
-  version: "1.5.0"
+  version: "1.6.0"
   author: Integritás Hatóság
 ---
 
@@ -29,7 +29,8 @@ of them, not into a closed file.
 | one attachment, without saving it | `file_read(path, attachment="2")` |
 | an attachment of an attached e-mail | `file_read(path, attachment="2/1")` |
 | the attachments as files | `file_attachments(path)` (or `dest=`, `which="1,3"`) |
-| to look at a PDF page | `file_render(path, pages="1")`, then open the PNG with the vision tool |
+| to look at a PDF page or a picture | `file_render(path, pages="1")`, then open the PNG with the vision tool |
+| a close look at one spot (a digit, an area, handwriting) | `file_render(path, pages="2", box="0.5,0.6,1,0.8")`: that region at 300 dpi |
 | what is in a .zip | `file_read(path)` on the .zip: a member list |
 | one file inside a .zip, without unpacking | `file_read(path, attachment="3")` or `attachment="name.pdf"` |
 | the .zip as a folder | `file_unpack(path)` (or `dest=`) |
@@ -52,7 +53,7 @@ follow the hint instead of retrying the same call.
   `inline` items are pictures in the body, usually signature logos; leave them
   out of a summary. `embedded_email: true` is an attached e-mail, readable with
   `attachment="<index>"`.
-- **Word / Excel / PowerPoint**: `text`; for Excel one block per sheet, for
+- **Word / Excel / PowerPoint**: `text`; for Excel (.xlsx and .xls) one block per sheet, for
   PowerPoint one per slide. A .docx also gives `comments` (author, date, text
   and the text they are anchored to), `revisions` (tracked insertions and
   deletions) and `checkboxes` (`checked`, `label`) when it has any.
@@ -61,6 +62,12 @@ follow the hint instead of retrying the same call.
 - **.zip**: `member_count` and `members` (`index`, `name`, `size`). Read one
   with `attachment=`; `file_find` searches inside the members. A member that
   is encrypted, too large or compressed suspiciously is marked `unreadable`.
+  Names stored by Windows Explorer or an older archiver in a DOS code page
+  come back with their accents (see `ZIP_NAME_ENCODING` in the README).
+- **Render** (`file_render`): `dpi` and `images`, each with `page` and `png`
+  (and `box` when cropped). `box` is `left,top,right,bottom` as fractions of
+  the page from its top-left corner. Use it to check a value an OCR reading
+  is unsure of; say what you saw on the image, not what the OCR said.
 - **labels**: `{"Iktatószám": "123/2026"}` — the rest of the line after each
   label. Case and accents are ignored; a label not found is left out. Check
   a value that matters against the `text`.
@@ -113,8 +120,9 @@ page to the OCR server, for a PDF whose text layer is garbage.
 - `file_unpack` skips a member whose path would land outside the target
   folder, an encrypted member and a likely zip bomb, and caps the sizes;
   `skipped` says what was left out and why. Nothing from an archive is run.
-- Legacy `.doc`, `.xls` and `.ppt` are not read here; open them with
-  office-live (`open_doc(path)`).
+- Legacy `.doc` and `.ppt` are not read here; open them with
+  office-live (`open_doc(path)`). An `.xls` is read with xlrd: values only,
+  formulas show their last computed result.
 - A password-protected PDF is refused; ask the user for an open copy.
 - Do not paste a whole document back to the user. Summarise, and quote the
   page or the attachment you are citing.
@@ -133,7 +141,7 @@ collect_files(r"C:\path\letters", labels="Iktatószám")
 
 or from a terminal: `py scripts/files.py read <path> [--pages 1-3] [--attachment 2] [--labels "A, B"]`,
 `find <path> "words" [--regex] [--recursive]`, `collect <folder|zip> [--labels ..] [--query ..] [--out x.csv]`,
-`unpack <zip> [--dest ..]`, `attachments <path>`, `render <path> --pages 1`, `status`.
+`unpack <zip> [--dest ..]`, `attachments <path>`, `render <path> --pages 1 [--box 0,0.5,1,1]`, `status`.
 
 `scripts/archive.py` (zip listing, reading and safe unpacking) and
 `scripts/docmeta.py` (Word comments, revisions and checkboxes; PDF signers
@@ -144,6 +152,7 @@ m365-graph; it is generated from `shared/pdfread.py` in the repository.
 
 Libraries: pypdfium2 (PDF text and rendering), pdfplumber (tables, optional),
 pdfminer.six (text fallback), pywinrt (Windows OCR, Windows only),
-olefile (.msg), openpyxl (.xlsx), pypdf (PDF form fields, optional). Word,
+olefile (.msg), openpyxl (.xlsx), xlrd (.xls), pypdf (PDF form fields, optional),
+pillow (pictures, cropping). Word,
 PowerPoint, .eml, .zip, HTML and text need nothing beyond Python. `status` lists what is installed and whether OCR is
 configured.
