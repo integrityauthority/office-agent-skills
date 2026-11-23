@@ -38,7 +38,7 @@ def legacy_zip(names, codepage):
     return data
 
 
-HUNGARIAN = ["Új_vny_bejelentések/levél.txt", "Árvíztűrő tükörfúrógép.txt", "őrző értesítése.txt"]
+HUNGARIAN = ["Új_bejelentések/levél.txt", "Árvíztűrő tükörfúrógép.txt", "őrző értesítése.txt"]
 
 
 @pytest.fixture(autouse=True)
@@ -80,11 +80,11 @@ def test_read_member_by_accented_name_and_unpack(tmp_path):
     data = legacy_zip(HUNGARIAN, "cp852")
     name, payload = archive.read_member(data, "levél.txt")
     assert name == "levél.txt" and payload == b"tartalom 0"
-    source = tmp_path / "Új_vny_bejelentések 10.02.zip"
+    source = tmp_path / "Új_bejelentések 10.02.zip"
     source.write_bytes(data)
     result = archive.unpack(source, tmp_path / "ki")
     assert result["count"] == 3
-    assert (tmp_path / "ki" / "Új_vny_bejelentések" / "levél.txt").read_bytes() == b"tartalom 0"
+    assert (tmp_path / "ki" / "Új_bejelentések" / "levél.txt").read_bytes() == b"tartalom 0"
     assert (tmp_path / "ki" / "őrző értesítése.txt").is_file()
 
 
