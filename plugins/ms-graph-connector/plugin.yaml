@@ -1,6 +1,6 @@
 manifest_version: 2
 name: ms-graph-connector
-version: 3.0.1
+version: 3.0.2
 description: >-
   Give Hermes read access to your own Microsoft 365: Outlook mail, OneDrive and
   SharePoint documents, Teams chats and your calendar, through the Microsoft

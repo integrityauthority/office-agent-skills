@@ -1544,11 +1544,24 @@ def _seed(ns):
                "save_as": save_as, "close_doc": close_doc, "owned": owned,
                "status": status, "com_date": com_date, "backup": backup})
     import outlook
-    ns.update({name: getattr(outlook, name) for name in (
-        "find_mail", "get_mail", "open_item", "current_mail", "summary",
-        "new_mail", "reply", "forward", "add_attachment", "folder",
-        "calendar", "new_appointment", "resolve", "find_contact",
-        "new_contact", "outlook_status", "readback")})
+    ns.update({name: getattr(outlook, name) for name in OUTLOOK_HELPERS})
+
+
+# The Outlook helpers live in outlook.py. They are already in the office_exec
+# namespace, but a model that writes `from office import find_mail` anyway (it
+# happened, twice in a row) should get the function, not an ImportError.
+OUTLOOK_HELPERS = (
+    "find_mail", "get_mail", "open_item", "current_mail", "summary",
+    "new_mail", "reply", "forward", "add_attachment", "folder",
+    "calendar", "new_appointment", "resolve", "find_contact",
+    "new_contact", "outlook_status", "readback")
+
+
+def __getattr__(name):
+    if name in OUTLOOK_HELPERS:
+        import outlook
+        return getattr(outlook, name)
+    raise AttributeError(f"module 'office' has no attribute {name!r}")
 
 
 def _describe_exception(e):

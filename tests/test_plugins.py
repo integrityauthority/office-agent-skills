@@ -17,12 +17,20 @@ CATALOGUE_LIMIT = 60     # Hermes tool search shows the first sentence, cut here
 
 class FakeContext:
     def __init__(self):
-        self.tools, self.descriptions, self.skills = {}, {}, []
+        self.tools, self.descriptions, self.skills, self.schemas = {}, {}, [], {}
 
     def register_tool(self, name, toolset, schema, handler, description="", emoji=""):
-        assert schema["type"] == "object"
+        # Hermes sends {**schema, "name": name} to the model as the function
+        # definition (tools/registry.py, get_definitions), so the schema must be
+        # a whole OpenAI function with a description and a parameters object.
+        # A bare parameter schema reached the model as a tool with neither.
+        assert schema.get("name") == name
+        assert schema.get("description", "").strip(), f"{name}: no description in the schema"
+        params = schema.get("parameters")
+        assert isinstance(params, dict) and params.get("type") == "object", f"{name}: no parameters"
         self.tools[name] = handler
         self.descriptions[name] = description
+        self.schemas[name] = schema
 
     def register_skill(self, name, path, description=""):
         assert Path(path).is_file()
@@ -75,13 +83,37 @@ def test_office_connector_descriptions_statically():
     """Registering office-connector starts a COM thread; read its source instead."""
     tree = ast.parse((PLUGINS / "office-connector" / "__init__.py").read_text(encoding="utf-8"))
     calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
-             and getattr(n.func, "attr", "") == "register_tool"]
+             and getattr(n.func, "attr", "") == "register_tool"
+             and getattr(n.func.value, "id", "") == "ctx"]
     assert len(calls) == 3
     for call in calls:
         description = next(k.value for k in call.keywords if k.arg == "description")
         text = "".join(c.value for c in ast.walk(description) if isinstance(c, ast.Constant)
                        and isinstance(c.value, str))
         assert len(first_sentence(text)) <= CATALOGUE_LIMIT
+
+
+@pytest.mark.parametrize("plugin", ["file-connector", "ms-graph-connector", "office-connector"])
+def test_register_wraps_the_context_for_function_schemas(plugin):
+    """office-connector cannot be registered here, so every plugin is also
+    checked in its source: register() starts by wrapping ctx."""
+    tree = ast.parse((PLUGINS / plugin / "__init__.py").read_text(encoding="utf-8"))
+    register = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "register")
+    first = register.body[0]
+    assert isinstance(first, ast.Assign) and ast.unparse(first) == "ctx = _FunctionSchemas(ctx)"
+
+
+def test_function_schema_wrapper():
+    source = (PLUGINS / "office-connector" / "__init__.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "_FunctionSchemas")
+    ns = {}
+    exec(compile(ast.Module(body=[cls], type_ignores=[]), "<adapter>", "exec"), ns)
+    ctx = ns["_FunctionSchemas"](FakeContext())
+    ctx.register_tool("t", "x", {"type": "object", "properties": {"code": {"type": "string"}}},
+                      lambda a=None, **_: "", description="Run it. More text.")
+    assert ctx.schemas["t"]["parameters"]["properties"] == {"code": {"type": "string"}}
+    assert ctx.skills == []                       # attributes pass through to the real context
 
 
 @pytest.mark.parametrize("plugin", ["file-connector", "ms-graph-connector", "office-connector"])

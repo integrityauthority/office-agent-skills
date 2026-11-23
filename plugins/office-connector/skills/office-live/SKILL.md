@@ -4,7 +4,7 @@ description: Work live in the user's running Microsoft Office on Windows over CO
 license: MIT
 compatibility: Windows with Microsoft Office desktop (Word, Excel, PowerPoint, classic Outlook) and Python with pywin32.
 metadata:
-  version: "2.4.5"
+  version: "2.4.6"
   author: Integritás Hatóság
 ---
 
@@ -465,6 +465,11 @@ pres.Slides.AddSlide(pres.Slides.Count + 1, pres.SlideMaster.CustomLayouts(2))
 ```
 
 ### Outlook
+
+The Outlook helpers below are Python functions already defined inside
+`office_exec`: write `office_exec(code="print(find_mail(since_days=7))")`.
+They are not separate tools — calling `find_mail` as a tool fails — and they
+need no import.
 
 Classic Outlook only (`OUTLOOK.EXE`). The new Outlook (`olk.exe`) has no COM
 interface at all — if `status()` says Outlook is not running and the user has

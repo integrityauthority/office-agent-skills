@@ -44,7 +44,29 @@ EXEC_SCHEMA = {
 NO_ARGS_SCHEMA = {"type": "object", "properties": {}}
 
 
+class _FunctionSchemas:
+    """Hermes builds each tool definition from `schema` as an OpenAI function,
+    {"name", "description", "parameters"}; the `description=` argument alone
+    only feeds its own listings. Handing it the bare parameter schema left the
+    model with tools that had no description and no parameters. This wraps the
+    parameter schemas below into function schemas; everything else passes
+    through to the real context."""
+
+    def __init__(self, ctx):
+        self._ctx = ctx
+
+    def __getattr__(self, name):
+        return getattr(self._ctx, name)
+
+    def register_tool(self, name, toolset, schema, handler, *args, **kwargs):
+        if "parameters" not in schema:
+            schema = {"name": name, "description": kwargs.get("description", ""),
+                      "parameters": schema}
+        return self._ctx.register_tool(name, toolset, schema, handler, *args, **kwargs)
+
+
 def register(ctx):
+    ctx = _FunctionSchemas(ctx)
     # The scripts directory has to be importable before the module that lives
     # in it, and `office_kernel` itself imports its sibling `office`.
     if str(_SCRIPTS) not in sys.path:
