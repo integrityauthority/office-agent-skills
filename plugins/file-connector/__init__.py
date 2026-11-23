@@ -17,7 +17,7 @@ _SCRIPTS = _SKILL_DIR / "scripts"
 READ_SCHEMA = {
     "type": "object",
     "properties": {
-        "path": {"type": "string", "description": "Full path of the file (PDF, image, .msg, .eml, Office, .zip, text)."},
+        "path": {"type": "string", "description": "Full path of the file (PDF, image, .msg, .eml, Office incl. .xls, .zip, text)."},
         "pages": {"type": "string",
                   "description": "PDF or multi-page TIFF pages, 1-based, e.g. '1-3,7'. Default: all."},
         "ocr": {"type": "string", "enum": ["auto", "server", "cloud", "force", "never"],
@@ -81,11 +81,15 @@ ATTACH_SCHEMA = {
 RENDER_SCHEMA = {
     "type": "object",
     "properties": {
-        "path": {"type": "string", "description": "Full path of the PDF, or of an e-mail with "
-                                                  "`attachment` set."},
+        "path": {"type": "string", "description": "Full path of the PDF or picture, or of an e-mail "
+                                                  "with `attachment` set."},
         "pages": {"type": "string", "description": "Pages, 1-based, e.g. '1' or '2-3'. Max 20."},
-        "dpi": {"type": "integer", "description": "Resolution. Default 150."},
-        "attachment": {"type": "string", "description": "A PDF attachment inside an .msg/.eml."},
+        "dpi": {"type": "integer", "description": "Resolution, 36-600. Default 150, or 300 with box."},
+        "box": {"type": "string",
+                "description": "Only this region of each page: 'left,top,right,bottom' as fractions "
+                               "of the page from its top-left corner, e.g. '0.5,0.6,1,0.8'. For a "
+                               "close look at a digit, an area or a handwritten entry."},
+        "attachment": {"type": "string", "description": "A PDF or picture attachment inside an .msg/.eml."},
     },
     "required": ["path"],
 }
@@ -145,7 +149,7 @@ def register(ctx):
     def _render(args=None, **_):
         a = args or {}
         return files.run(files.render_pages, a.get("path"), pages=a.get("pages") or "1",
-                         dpi=a.get("dpi") or 150, attachment=a.get("attachment"))
+                         dpi=a.get("dpi") or None, attachment=a.get("attachment"), box=a.get("box"))
 
     def _find(args=None, **_):
         a = args or {}
@@ -208,8 +212,9 @@ def register(ctx):
     ctx.register_tool(
         "file_render", "files", RENDER_SCHEMA, _render,
         description=(
-            "Render PDF pages to PNG images to look at them. "
-            "Returns the image paths; open them with the vision tool."
+            "Render PDF pages or pictures to PNG to look at them. "
+            "Returns the image paths; open them with the vision tool. box= crops to one "
+            "region at a higher resolution, to check an uncertain digit or area."
         ),
         emoji="\N{FRAME WITH PICTURE}",
     )

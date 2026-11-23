@@ -11,11 +11,22 @@ Nothing in an archive is ever run.
     list_members(data)                 # [{index, name, size, ...}]
     read_member(data, "2")             # (name, bytes), by index or by name
     unpack(r"C:\\path\\a.zip")         # next to the zip, or dest=
+
+Member names. A zip made by Windows Explorer or an older archiver stores
+names in the machine's DOS code page without the UTF-8 flag, and Python
+reads them as cp437, so accented letters come out wrong. Such a name is
+decoded again: as UTF-8 when its bytes are valid UTF-8, otherwise with the
+code page in ZIP_NAME_ENCODING. The default, `auto`, picks between cp852
+(Central European DOS), cp1250 (Central European Windows) and cp437, whichever
+reads as letters rather than symbols. Set ZIP_NAME_ENCODING to one code page
+(for example cp852) to use only that one.
 """
 from __future__ import annotations
 
 import io
+import os
 import re
+import unicodedata
 import zipfile
 from pathlib import Path
 
@@ -31,6 +42,72 @@ class ArchiveError(Exception):
     def __init__(self, message, hint=""):
         super().__init__(message)
         self.hint = hint
+
+
+UTF8_FLAG = 0x800
+AUTO_CODEPAGES = ("cp852", "cp1250", "cp437")
+
+
+def _name_codepages():
+    """The code pages to try for a name stored without the UTF-8 flag."""
+    setting = os.environ.get("ZIP_NAME_ENCODING", "").strip().lower()
+    if not setting or setting == "auto":
+        return AUTO_CODEPAGES
+    try:
+        "".encode(setting)
+    except LookupError:
+        return AUTO_CODEPAGES
+    return (setting,)
+
+
+def _score(text):
+    """Higher for a name that reads as words. An accented Latin letter counts
+    for it; a symbol, box drawing, a control character or a non-Latin letter
+    counts against, and so does a capital inside a lower-case word
+    ('bejelentÚsek' is the cp1250 reading of a cp852 name)."""
+    score = 0
+    previous = ""
+    for ch in text:
+        if not ch.isascii():
+            category = unicodedata.category(ch)
+            if category.startswith("L") and unicodedata.name(ch, "").startswith("LATIN"):
+                score += 2
+                if ch.isupper() and previous.islower():
+                    score -= 3
+            elif category.startswith("L"):
+                score -= 1
+            elif category.startswith("C") or 0x2500 <= ord(ch) <= 0x25FF:
+                score -= 5
+            else:
+                score -= 3
+        previous = ch
+    return score
+
+
+def member_name(info):
+    """The member's file name, decoded right whatever wrote the zip."""
+    name = info.filename
+    if info.flag_bits & UTF8_FLAG or name.isascii():
+        return name
+    try:
+        raw = name.encode("cp437")
+    except UnicodeEncodeError:
+        # Python already decoded it another way (metadata_encoding); keep it.
+        return name
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
+    best, best_score = name, None
+    for codepage in _name_codepages():
+        try:
+            candidate = raw.decode(codepage)
+        except (UnicodeDecodeError, LookupError):
+            continue
+        score = _score(candidate)
+        if best_score is None or score > best_score:
+            best, best_score = candidate, score
+    return best
 
 
 def _open(data):
@@ -57,8 +134,9 @@ def list_members(data):
         files = [info for info in archive.infolist() if not info.is_dir()]
         out = []
         for index, info in enumerate(files[:MAX_MEMBERS], 1):
-            row = {"index": index, "name": info.filename, "size": info.file_size,
-                   "suffix": Path(info.filename).suffix.lower()}
+            name = member_name(info)
+            row = {"index": index, "name": name, "size": info.file_size,
+                   "suffix": Path(name).suffix.lower()}
             refusal = _refusal(info)
             if refusal:
                 row["unreadable"] = refusal
@@ -80,17 +158,17 @@ def read_member(data, selector):
             chosen = files[number - 1]
         else:
             wanted = text.replace("\\", "/").lower()
-            exact = [i for i in files if i.filename.lower() == wanted]
-            tail = [i for i in files if i.filename.lower().rsplit("/", 1)[-1] == wanted]
+            exact = [i for i in files if member_name(i).lower() == wanted]
+            tail = [i for i in files if member_name(i).lower().rsplit("/", 1)[-1] == wanted]
             chosen = (exact or tail or [None])[0]
             if chosen is None:
                 raise ArchiveError(f"no member named {selector!r}",
-                                   "Available: " + ", ".join(f"{n}={i.filename}" for n, i in enumerate(files[:30], 1)))
+                                   "Available: " + ", ".join(f"{n}={member_name(i)}" for n, i in enumerate(files[:30], 1)))
         refusal = _refusal(chosen)
         if refusal:
-            raise ArchiveError(f"{chosen.filename} is not read: {refusal}")
+            raise ArchiveError(f"{member_name(chosen)} is not read: {refusal}")
         with archive.open(chosen) as handle:
-            return chosen.filename.rsplit("/", 1)[-1], handle.read(MAX_MEMBER_BYTES + 1)[:MAX_MEMBER_BYTES]
+            return member_name(chosen).rsplit("/", 1)[-1], handle.read(MAX_MEMBER_BYTES + 1)[:MAX_MEMBER_BYTES]
 
 
 def _target(root: Path, name: str):
@@ -149,16 +227,17 @@ def unpack(path, dest=None):
         if len(members) > MAX_MEMBERS:
             raise ArchiveError(f"the zip has more than {MAX_MEMBERS} files")
         for info in members:
-            target = _target(folder, info.filename)
+            name = member_name(info)
+            target = _target(folder, name)
             if target is None:
-                skipped.append({"name": info.filename, "reason": "path escapes the destination"})
+                skipped.append({"name": name, "reason": "path escapes the destination"})
                 continue
             refusal = _refusal(info)
             if refusal:
-                skipped.append({"name": info.filename, "reason": refusal})
+                skipped.append({"name": name, "reason": refusal})
                 continue
             if total + info.file_size > MAX_TOTAL_BYTES:
-                skipped.append({"name": info.filename, "reason": "uncompressed total exceeded"})
+                skipped.append({"name": name, "reason": "uncompressed total exceeded"})
                 break
             target = _unique(target)
             target.parent.mkdir(parents=True, exist_ok=True)
