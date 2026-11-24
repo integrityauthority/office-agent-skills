@@ -4,7 +4,7 @@ description: Work live in the user's running Microsoft Office on Windows over CO
 license: MIT
 compatibility: Windows with Microsoft Office desktop (Word, Excel, PowerPoint, classic Outlook) and Python with pywin32.
 metadata:
-  version: "2.4.6"
+  version: "2.4.7"
   author: Integritás Hatóság
 ---
 
@@ -535,6 +535,18 @@ m        # -> {"recipients": [{"name": "Dr Jane Doe", "email": "jane.doe@...",
 Do not read Outlook properties by hand to check a draft — an agent did, guessed
 `Recipients.Account` (no such thing; Recipients is a collection) and spent a
 turn on the error.
+
+**After composing, say what happened: the draft is open in Outlook for the
+user to check and send.** Never write that you sent it — the readback's
+`status` says `NOT sent`. If a call fails after the window opened, the draft
+may already be on screen: look before composing a second one.
+
+**To answer a message, use `reply`, not `new_mail`** — a reply stays in the
+thread and keeps the quoted original. `reply` and `forward` take the
+`entry_id` from `find_mail` (positionally or as `entry_id=`) or the row
+itself. To find someone's mail, filter in the call —
+`find_mail(sender="smith", since_days=14)` — rather than fetching everything
+and filtering in Python; a summary row has `unread` (and `read`).
 
 Things that will bite:
 

@@ -80,6 +80,8 @@ def _is_com(value):
 
 
 def _unwrap(value):
+    if isinstance(value, _Composed):
+        value = object.__getattribute__(value, "_item")
     if isinstance(value, _Guarded):
         return object.__getattribute__(value, "_o")
     if isinstance(value, (list, tuple)):
@@ -88,7 +90,7 @@ def _unwrap(value):
 
 
 def _wrap(value):
-    if isinstance(value, _Guarded) or value is None:
+    if isinstance(value, (_Guarded, _Composed)) or value is None:
         return value
     if _is_com(value):
         return _Guarded(value)
@@ -155,6 +157,45 @@ class _Guarded:
         except Exception:
             pass
         return f"<guarded {object.__getattribute__(self, '_o')!r}>"
+
+
+class _Composed(dict):
+    """What new_mail, reply and forward return: the readback as a plain dict,
+    so `print(json.dumps(m))` works (a model did exactly that and got
+    "_Guarded is not JSON serializable" — after the draft had opened), with
+    the guarded Outlook item behind it for everything else: m.Subject,
+    m.Attachments, add_attachment(m, ...), and a refused m.Send()."""
+
+    def __init__(self, guarded):
+        super().__init__(readback(guarded))
+        object.__setattr__(self, "_item", guarded)
+
+    def __getattr__(self, name):
+        if name.startswith("__"):
+            raise AttributeError(name)
+        return getattr(object.__getattribute__(self, "_item"), name)
+
+    def __setattr__(self, name, value):
+        setattr(object.__getattribute__(self, "_item"), name, value)
+
+    def __repr__(self):
+        try:
+            import json
+            return json.dumps(readback(self), ensure_ascii=False, default=str)
+        except Exception:
+            return dict.__repr__(self)
+
+
+def _source_item(item, entry_id):
+    """The raw item to reply to or forward: an entry_id string (positional or
+    entry_id=), a guarded item, or a find_mail/get_mail row with an entry_id."""
+    item = entry_id if item is None else item
+    if isinstance(item, dict) and not isinstance(item, _Composed) and item.get("entry_id"):
+        item = item["entry_id"]
+    if item is None:
+        raise OfficeError("no message to answer: pass its entry_id",
+                          "reply(entry_id, body=...) — the entry_id comes from find_mail")
+    return _raw_ns().GetItemFromID(item) if isinstance(item, str) else _unwrap(item)
 
 
 # ---------------------------------------------------------------- attach ---
@@ -271,6 +312,7 @@ def summary(item):
             pass
     try:
         out["unread"] = bool(raw.UnRead)
+        out["read"] = not out["unread"]     # both: a model filtered on "read" and got none
         out["attachments"] = [a.FileName for a in raw.Attachments]
     except Exception:
         pass
@@ -326,6 +368,11 @@ def readback(item, chars=300):
             out["sent"] = bool(raw.Sent)
         except Exception:
             pass
+        if not out.get("sent"):
+            # Said in so many words: a model told the user "I have sent it"
+            # when the draft was only open on screen.
+            out["status"] = ("NOT sent: open in Outlook for the user to review; "
+                             "the user presses Send")
     body = (raw.Body or "").strip()
     out["text_start"] = body[:chars]
     out["text_chars"] = len(body)
@@ -487,33 +534,34 @@ def new_mail(to=None, subject="", body=None, html=None, cc=None, bcc=None,
         raw.Display(False)
     _insert_top(raw, _fragment(body, html))
     _attach(raw, attachments)
-    return _Guarded(raw)
+    return _Composed(_Guarded(raw))
 
 
-def reply(item, body=None, html=None, reply_all=False, attachments=(),
-          display=True):
-    """Reply (or reply-all) to `item` — an entry_id or a guarded item. The
-    quoted original and the signature are kept; the new text goes on top."""
-    raw_src = (_raw_ns().GetItemFromID(item) if isinstance(item, str)
-               else _unwrap(item))
+def reply(item=None, body=None, html=None, reply_all=False, attachments=(),
+          display=True, entry_id=None):
+    """Reply (or reply-all) to `item` — an entry_id (also as entry_id=), a
+    find_mail row or a guarded item. The quoted original and the signature
+    are kept; the new text goes on top. Use this, not new_mail, to answer a
+    message: it stays in the thread."""
+    raw_src = _source_item(item, entry_id)
     raw = raw_src.ReplyAll() if reply_all else raw_src.Reply()
     if display:
         raw.Display(False)
     _insert_top(raw, _fragment(body, html))
     _attach(raw, attachments)
-    return _Guarded(raw)
+    return _Composed(_Guarded(raw))
 
 
-def forward(item, to=None, body=None, html=None, attachments=(), display=True):
-    raw_src = (_raw_ns().GetItemFromID(item) if isinstance(item, str)
-               else _unwrap(item))
+def forward(item=None, to=None, body=None, html=None, attachments=(), display=True,
+            entry_id=None):
+    raw_src = _source_item(item, entry_id)
     raw = raw_src.Forward()
     _recipients(raw, to)
     if display:
         raw.Display(False)
     _insert_top(raw, _fragment(body, html))
     _attach(raw, attachments)
-    return _Guarded(raw)
+    return _Composed(_Guarded(raw))
 
 
 def add_attachment(item, path):
