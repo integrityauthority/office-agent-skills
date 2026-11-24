@@ -92,10 +92,12 @@ def _com_worker():
                 continue
             import office as _office_mod
             if hasattr(_office_mod, "begin_exec"):
-                _office_mod.begin_exec()
+                _office_mod.begin_exec(code)
             result = _run_snippet(code)
             if hasattr(_office_mod, "finish_exec"):
-                _office_mod.finish_exec(True)
+                marked = _office_mod.finish_exec(True)
+                if marked:
+                    result["marked"] = marked
             reply.put(result)
         except SyntaxError as e:
             try:

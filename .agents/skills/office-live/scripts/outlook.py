@@ -41,6 +41,7 @@ import html as _html
 import os
 import re
 
+import ai_mark
 import office
 from office import OfficeError
 
@@ -474,10 +475,14 @@ _FONT = 'font-family:Aptos,Calibri,Arial,sans-serif;font-size:11pt'
 
 
 def _fragment(body=None, html=None):
+    """The inserted text as one <div>. With AI-text marking on, the div also
+    carries the mark; Outlook's editor applies it to every paragraph, list
+    item and run inside (checked against a live draft)."""
     if html is None and body is None:
         return ""
     inner = html if html is not None else _text_to_html(body)
-    return f'<div style="{_FONT}">{inner}</div>'
+    style = _FONT + (";" + ai_mark.css() if ai_mark.enabled() else "")
+    return f'<div style="{style}">{inner}</div>'
 
 
 def _insert_top(raw_item, fragment):

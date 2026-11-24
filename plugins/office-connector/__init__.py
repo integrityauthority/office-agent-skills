@@ -127,7 +127,10 @@ def register(ctx):
             "document is unsaved returns the same window, including after a "
             "successful open. Pass fresh=True only for an additional document. "
             "Set Word styles by id (-63 title, -2 heading 1). Do not set "
-            "table.Style to an English name."
+            "table.Style to an English name. When the deployment turns "
+            "AI-text marking on, the text a call adds is underlined for the "
+            "user's review automatically; the reply says what under 'marked'. "
+            "Never remove that mark."
         ),
         emoji="\N{PENCIL}",
     )

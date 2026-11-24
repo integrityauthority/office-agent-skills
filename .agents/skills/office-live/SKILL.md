@@ -4,7 +4,7 @@ description: Work live in the user's running Microsoft Office on Windows over CO
 license: MIT
 compatibility: Windows with Microsoft Office desktop (Word, Excel, PowerPoint, classic Outlook) and Python with pywin32.
 metadata:
-  version: "2.5.0"
+  version: "2.6.0"
   author: Integritás Hatóság
 ---
 
@@ -30,6 +30,30 @@ there, so there is nothing to set up.
   `open_doc`, then write into it, so they watch it take shape and can
   correct it. Do not build the deliverable as a closed file in the background
   and hand over only a path.
+
+## Text you add is marked for review
+
+When the deployment sets `OFFICE_LIVE_MARK_AI=on` (`office_status` reports it
+under `ai_marking`), every piece of text an `office_exec` call adds is marked
+so the user can see what to review: a thick underline in `#0F9ED5` (or
+`OFFICE_LIVE_MARK_COLOR`) in Word, PowerPoint and Outlook drafts, and a double
+underline in Excel, which has no thick or coloured underline. The rest of the
+formatting stays as you set it. A new document you write from scratch is
+marked in full.
+
+You do not apply it. The tool does, after each call, in every document you
+reached through `attach`, `new_doc` or `open_doc`, and `new_mail`, `reply`
+and `forward` mark the text they insert. The reply lists what was marked
+under `marked`. Do not remove a mark and do not underline text to imitate
+one: the user takes it off by removing the underline once they have reviewed
+the text. Code: `scripts/ai_mark.py`.
+
+- **Word:** the call runs with Track Changes on, so the new text can be found.
+  A document that was not tracking returns to that state with your changes
+  accepted (and marked), unless your call turned tracking on itself.
+- **Text the tool cannot see** — typed into an open Outlook draft through its
+  `WordEditor` — mark yourself with `mark_ai(range)`; it takes a Word range, a
+  PowerPoint `TextRange2` or an Excel range.
 
 ## How to call it
 

@@ -28,6 +28,8 @@ import os
 import shutil
 import sys
 
+import ai_mark
+
 HOSTS = {
     "word": ("Word.Application", "Documents"),
     "excel": ("Excel.Application", "Workbooks"),
@@ -136,7 +138,9 @@ def attach(host, name=None, launch=False):
         raise OfficeError(f"unknown host {host!r}",
                           f"expected one of {list(HOSTS) + ['outlook']}")
     app = get_app(host, launch=launch)
-    return app, pick(app, host, name)
+    doc = pick(app, host, name)
+    ai_mark.see(host, doc)
+    return app, doc
 
 
 def _pywin32_paths():
@@ -402,6 +406,7 @@ def open_doc(host, path, visible=True, launch=False):
     if visible:
         _show_app(app)
     _OWNED.add(_doc_key(doc))
+    ai_mark.see(host, doc)
     return app, doc
 
 
@@ -422,9 +427,12 @@ def _open_by_key(app, host, key):
     return None
 
 
-def begin_exec():
-    """A snippet is starting. Forget which hosts it has called new_doc for."""
+def begin_exec(code=""):
+    """A snippet is starting. Forget which hosts it has called new_doc for,
+    and note what the watched documents hold so the new text can be marked
+    (ai_mark; off unless the deployment turns it on)."""
     _TOUCHED.clear()
+    ai_mark.begin(code)
 
 
 def finish_exec(ok):
@@ -434,8 +442,11 @@ def finish_exec(ok):
     Releasing on that first success made the second new_doc open an empty
     extra window. The document stays the one new_doc returns until it is
     saved, closed, or the caller passes fresh=True.
+
+    Returns what ai_mark marked during the snippet, or None.
     """
     _TOUCHED.clear()
+    return ai_mark.end()
 
 
 def new_doc(host, visible=True, launch=False, fresh=False):
@@ -462,6 +473,7 @@ def new_doc(host, visible=True, launch=False, fresh=False):
             if visible:
                 _show_app(app)
                 _set_window_visible(existing, True)
+            ai_mark.see(host, existing)
             return app, existing
         if key:
             _UNFINISHED.pop(host, None)
@@ -478,6 +490,7 @@ def new_doc(host, visible=True, launch=False, fresh=False):
         _show_app(app)
     _OWNED.add(_doc_key(doc))
     _UNFINISHED[host] = _doc_key(doc)
+    ai_mark.see(host, doc)
     return app, doc
 
 
@@ -1163,6 +1176,7 @@ def status():
         report["outlook"] = outlook.outlook_status()
     except Exception as e:
         report["outlook"] = {"running": False, "note": str(e)}
+    report["ai_marking"] = ai_mark.describe()
     return report
 
 
@@ -1542,7 +1556,8 @@ def _seed(ns):
                "final_text": final_text, "text_chunks": text_chunks,
                "doc_kind": doc_kind, "open_doc": open_doc, "new_doc": new_doc,
                "save_as": save_as, "close_doc": close_doc, "owned": owned,
-               "status": status, "com_date": com_date, "backup": backup})
+               "status": status, "com_date": com_date, "backup": backup,
+               "mark_ai": ai_mark.mark})
     import outlook
     ns.update({name: getattr(outlook, name) for name in OUTLOOK_HELPERS})
 
