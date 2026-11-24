@@ -4,7 +4,7 @@ description: Work live in the user's running Microsoft Office on Windows over CO
 license: MIT
 compatibility: Windows with Microsoft Office desktop (Word, Excel, PowerPoint, classic Outlook) and Python with pywin32.
 metadata:
-  version: "2.6.0"
+  version: "2.6.1"
   author: Integritás Hatóság
 ---
 
@@ -171,11 +171,22 @@ style by its built-in id: `-63` title, `-75` subtitle, `-2` heading 1,
 
 ```python
 app, doc = new_doc("word", launch=True)
-sel = doc.Content
-sel.Style = -63
-sel.TypeText("Title\n")
+
+def add(text, style=-1):        # -63 title, -2 heading 1, -3 heading 2, -1 normal
+    rng = doc.Content
+    rng.Collapse(0)             # wdCollapseEnd: write at the end
+    rng.InsertAfter(text)
+    rng.Style = style
+    rng.InsertParagraphAfter()
+
+add("Title", -63)
+add("Background", -2)
+add("First paragraph.")
 # on a later retry this same call returns the document above
 ```
+
+`TypeText` belongs to `app.Selection`, not to a range: `doc.Content.TypeText`
+raises AttributeError, and `doc.Selection` does not exist.
 
 `visible=False` hides the *document*, never the application — the user's other windows stay put. `save_as` refuses an existing target (Excel would answer with a modal dialog, which over COM is a hang).
 
