@@ -4,7 +4,7 @@ description: Work live in the user's running Microsoft Office on Windows over CO
 license: MIT
 compatibility: Windows with Microsoft Office desktop (Word, Excel, PowerPoint, classic Outlook) and Python with pywin32.
 metadata:
-  version: "2.4.7"
+  version: "2.4.8"
   author: Integritás Hatóság
 ---
 
@@ -498,8 +498,8 @@ new_mail(to=["john.smith@example.org"], subject="Missing documents",
          html="<p>Dear Mr Smith,</p><p>The <b>15-day</b> deadline ...</p>"
               "<ul><li>first</li><li>second</li></ul>",
          attachments=[r"C:\...\request.pdf"])
-reply(entry_id, body="Thanks, I will take a look.")      # text goes ABOVE the quote
-reply(entry_id, html="...", reply_all=True)
+reply(entry_id, body="Thanks, I will take a look.")      # reply-all on the thread; text ABOVE the quote
+reply(entry_id, html="...", reply_all=False)             # the sender alone, only when asked
 forward(entry_id, to="x@example.org", body="FYI.")
 add_attachment(item, r"C:\...\annex.docx")
 readback(item)                                   # what it really contains
@@ -541,8 +541,11 @@ user to check and send.** Never write that you sent it — the readback's
 `status` says `NOT sent`. If a call fails after the window opened, the draft
 may already be on screen: look before composing a second one.
 
-**To answer a message, use `reply`, not `new_mail`** — a reply stays in the
-thread and keeps the quoted original. `reply` and `forward` take the
+**When the user answers a message you are discussing, reply on its thread,
+to everyone on it** — `reply` does reply-all by default and keeps the quoted
+original; `new_mail` would start a new thread and drop the others. Use
+`reply_all=False` only when the user says to answer the sender alone; say
+who the reply goes to. `reply` and `forward` take the
 `entry_id` from `find_mail` (positionally or as `entry_id=`) or the row
 itself. To find someone's mail, filter in the call —
 `find_mail(sender="smith", since_days=14)` — rather than fetching everything

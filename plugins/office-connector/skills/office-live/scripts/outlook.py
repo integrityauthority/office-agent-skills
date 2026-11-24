@@ -537,12 +537,13 @@ def new_mail(to=None, subject="", body=None, html=None, cc=None, bcc=None,
     return _Composed(_Guarded(raw))
 
 
-def reply(item=None, body=None, html=None, reply_all=False, attachments=(),
+def reply(item=None, body=None, html=None, reply_all=True, attachments=(),
           display=True, entry_id=None):
-    """Reply (or reply-all) to `item` — an entry_id (also as entry_id=), a
-    find_mail row or a guarded item. The quoted original and the signature
+    """Reply to `item` — an entry_id (also as entry_id=), a find_mail row or a
+    guarded item — on its thread, to everyone on it by default (reply_all=
+    False answers the sender alone). The quoted original and the signature
     are kept; the new text goes on top. Use this, not new_mail, to answer a
-    message: it stays in the thread."""
+    message. The draft opens for the user, who can still drop a recipient."""
     raw_src = _source_item(item, entry_id)
     raw = raw_src.ReplyAll() if reply_all else raw_src.Reply()
     if display:

@@ -58,7 +58,10 @@ class FakeMail:
         answer.Recipients.items.append(FakeRecipient(self.sender, "jane.doe@example.org"))
         return answer
 
-    ReplyAll = Reply
+    def ReplyAll(self):
+        answer = self.Reply()
+        answer.Recipients.items.append(FakeRecipient("John Smith", "john.smith@example.org"))
+        return answer
 
     def Forward(self):
         return FakeMail("FW: " + self.Subject)
@@ -101,6 +104,13 @@ def test_reply_takes_an_entry_id_however_it_is_given(outlook_app, call):
     r = call()
     assert r["subject"] == "RE: Annual leave" and r["recipients"][0]["email"] == "jane.doe@example.org"
     assert r["status"].startswith("NOT sent")
+
+
+def test_reply_goes_to_everyone_on_the_thread_by_default(outlook_app):
+    everyone = outlook.reply("ID-1", body="Thanks.")
+    assert [r["email"] for r in everyone["recipients"]] == ["jane.doe@example.org", "john.smith@example.org"]
+    sender_only = outlook.reply("ID-1", body="Thanks.", reply_all=False)
+    assert [r["email"] for r in sender_only["recipients"]] == ["jane.doe@example.org"]
 
 
 def test_reply_without_a_message_says_how(outlook_app):
