@@ -109,7 +109,11 @@ def register(ctx):
         description=(
             # The tool-search catalogue shows only the first sentence, cut at 60
             # characters, so it has to stand on its own.
-            "Work live in open Word, Excel, PowerPoint and Outlook. "
+            "Create or edit Word, Excel, PowerPoint docs live; Outlook. "
+            "A new report, letter or table the user asks for in Word or "
+            "Excel is written here, in a document opened in front of them "
+            "with new_doc(\"word\", launch=True) — not as a .docx built in "
+            "the background. "
             "Runs Python against the running Office over COM: the open "
             "document, and classic Outlook — search "
             "mail, read messages, compose new mail, replies (reply-all on the "
@@ -146,5 +150,5 @@ def register(ctx):
     if skill.exists():
         ctx.register_skill(
             "office-live", skill,
-            description="Edit the OPEN Word, Excel or PowerPoint document with office_exec. If the user asks, start Word or Excel with new_doc or open_doc and launch=True. Another new_doc while that document is unsaved returns the same window, even when the previous call succeeded. Do not open a second one. Set Word styles by id (-63 title, -2 heading). Do not set a table style by its English name. Accented text must be a Python string there. Never use computer-use, cscript, or a .vbs/.ps1 file: Windows Script Host reads UTF-8 as the ANSI code page and corrupts the characters.",
+            description="Edit the OPEN Word, Excel or PowerPoint document with office_exec, or write a new report, letter or table there when the user asks for it in Word or Excel. If the user asks, start Word or Excel with new_doc or open_doc and launch=True. Another new_doc while that document is unsaved returns the same window, even when the previous call succeeded. Do not open a second one. Set Word styles by id (-63 title, -2 heading). Do not set a table style by its English name. Accented text must be a Python string there. Never use computer-use, cscript, or a .vbs/.ps1 file: Windows Script Host reads UTF-8 as the ANSI code page and corrupts the characters.",
         )

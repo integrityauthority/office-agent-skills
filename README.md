@@ -96,7 +96,7 @@ wherever you are:
 
 | Plugin | What it gives the agent | Hermes tools |
 |---|---|---|
-| `office-connector` | Work in the Word, Excel, PowerPoint and Outlook windows you already have open (Windows) | `office_status`, `office_exec`, `office_reset` |
+| `office-connector` | Work in the Word, Excel, PowerPoint and Outlook windows you have open, and write new documents in front of you (Windows) | `office_status`, `office_exec`, `office_reset` |
 | `ms-graph-connector` | Read your own Microsoft 365: Outlook mail, OneDrive and SharePoint files, Teams chats, calendar | `m365_status`, `m365_login`, `m365_search`, `m365_get` |
 | `file-connector` | Read and search PDF and images (with OCR for scanned pages and pictures), .msg and .eml e-mails with attachments, Word, Excel and PowerPoint files and .zip archives from disk; tabulate a folder of letters or documents | `file_read`, `file_find`, `file_collect`, `file_unpack`, `file_attachments`, `file_render` |
 
