@@ -1664,7 +1664,11 @@ def daemon_main():
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.bind(("127.0.0.1", 0))
     srv.listen(1)
-    srv.settimeout(60)
+    # Short accepts with a message pump between them: this thread receives
+    # Excel's SheetChange events (ai_mark), and one that does not pump leaves
+    # Excel stuck behind "waiting for another application to complete an OLE
+    # action" whenever the user edits a cell between calls.
+    srv.settimeout(0.05)
     port = srv.getsockname()[1]
     token = secrets.token_hex(16)
 
@@ -1678,9 +1682,12 @@ def daemon_main():
             try:
                 conn, _ = srv.accept()
             except socket.timeout:
+                with contextlib.suppress(Exception):
+                    pythoncom.PumpWaitingMessages()
                 if time.time() - last > IDLE_EXIT_SECONDS:
                     return
                 continue
+            conn.settimeout(120)
             last = time.time()
             with conn:
                 try:

@@ -4,7 +4,7 @@ description: Work live in the user's running Microsoft Office on Windows over CO
 license: MIT
 compatibility: Windows with Microsoft Office desktop (Word, Excel, PowerPoint, classic Outlook) and Python with pywin32.
 metadata:
-  version: "2.6.1"
+  version: "2.6.2"
   author: Integritás Hatóság
 ---
 

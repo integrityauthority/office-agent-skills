@@ -79,12 +79,34 @@ def _run_snippet(code: str) -> dict:
     return {"ok": True, "result": value, "stdout": stdout.getvalue()[-4000:]}
 
 
+IDLE_PUMP_SECONDS = 0.05
+
+
+def _next_request(pythoncom):
+    """Wait for the next call while still answering COM.
+
+    This thread is a COM apartment, and ai_mark subscribes it to Excel's
+    SheetChange. A bare queue.get() here stopped the thread from processing
+    window messages between calls, so every edit the user made in Excel sent
+    an event that nobody received, and Excel froze behind "Microsoft Excel is
+    waiting for another application to complete an OLE action". Pumping while
+    idle delivers those events at once."""
+    while True:
+        try:
+            return _requests.get(timeout=IDLE_PUMP_SECONDS)
+        except queue.Empty:
+            try:
+                pythoncom.PumpWaitingMessages()
+            except Exception:
+                pass
+
+
 def _com_worker():
     import pythoncom
     pythoncom.CoInitialize()
     _seed_namespace()
     while True:
-        code, reply = _requests.get()
+        code, reply = _next_request(pythoncom)
         try:
             if code is None:                      # reset request
                 _seed_namespace()
