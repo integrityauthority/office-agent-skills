@@ -259,3 +259,30 @@ def test_manifest_names_the_provider():
     assert "kind: backend" in manifest
     assert "name: local-web-reader" in manifest
     assert "\n  - " + load_plugin().NAME + "\n" in manifest
+
+
+def test_command_line_prints_markdown_and_reports_failures(monkeypatch, capsys):
+    pages = {
+        "https://example.org/a": {"url": "https://example.org/a", "final_url": "https://example.org/a",
+                                  "title": "Page A", "content": "First page.", "via": "http"},
+        "https://example.org/b": {"url": "https://example.org/b", "error": "HTTP 404 from origin: Not Found"},
+        "https://example.org/c": {"url": "https://example.org/c", "final_url": "https://example.org/c",
+                                  "title": "", "content": "Third page.", "via": "http"},
+    }
+    monkeypatch.setattr(web_reader, "read", lambda url, max_chars=0: pages[url])
+    code = web_reader.main(list(pages))
+    out, err = capsys.readouterr()
+    assert code == 1
+    assert out.startswith("# Page A\n\nSource: https://example.org/a\n\nFirst page.")
+    assert "\n---\n" in out and "# https://example.org/c" in out and "Third page." in out
+    assert "example.org/b" not in out and "HTTP 404 from origin" in err
+
+
+def test_command_line_json_and_success_code(monkeypatch, capsys):
+    import json
+
+    monkeypatch.setattr(web_reader, "read", lambda url, max_chars=0: {
+        "url": url, "final_url": url, "title": "T", "content": "x" * max_chars, "via": "http"})
+    assert web_reader.main(["https://example.org/", "--json", "--max-chars", "5"]) == 0
+    row = json.loads(capsys.readouterr().out)
+    assert row["content"] == "xxxxx" and row["title"] == "T"

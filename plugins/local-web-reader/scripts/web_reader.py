@@ -16,6 +16,14 @@ service wants a key. This module reads the page itself:
    browser is started here and no other program is run.
 
 Nothing leaves the machine except the request to the page itself.
+
+It also runs on its own, for any agent or person that can run a command:
+
+    python web_reader.py URL [URL ...]            # Markdown: title, source, text
+    python web_reader.py URL --json               # one JSON object per URL
+    python web_reader.py URL --max-chars 20000    # cut long pages
+
+Exit code 0 when every URL was read, 1 when any failed (the reason is on stderr).
 """
 
 from __future__ import annotations
@@ -354,3 +362,44 @@ def _done(url, final, title, text, via, max_chars):
     if max_chars and len(text) > max_chars:
         text = text[:max_chars].rstrip() + f"\n\n[… truncated at {max_chars} characters]"
     return {"url": url, "final_url": final, "title": title, "content": text, "via": via}
+
+
+def main(argv=None) -> int:
+    """Command line: read each URL and print it as Markdown (or JSON with --json)."""
+    import argparse
+    import json
+    import sys
+
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+    parser = argparse.ArgumentParser(
+        prog="web_reader.py",
+        description="Read public web pages on this machine and print them as Markdown (no API key).",
+    )
+    parser.add_argument("urls", nargs="+", help="public http or https URLs")
+    parser.add_argument("--json", action="store_true", help="print one JSON object per URL instead of Markdown")
+    parser.add_argument("--max-chars", type=int, default=MAX_CHARS, help=f"cut each page here (default {MAX_CHARS})")
+    args = parser.parse_args(argv)
+
+    failed = printed = 0
+    for url in args.urls:
+        result = read(url, max_chars=args.max_chars)
+        if result.get("error"):
+            failed += 1
+            print(f"{url}: {result['error']}", file=sys.stderr)
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False))
+            continue
+        if result.get("error"):
+            continue
+        if printed:
+            print("\n---\n")
+        source = result.get("final_url") or url
+        print(f"# {result.get('title') or source}\n\nSource: {source}\n\n{result['content']}")
+        printed += 1
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
