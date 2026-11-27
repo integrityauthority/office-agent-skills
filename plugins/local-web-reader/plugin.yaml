@@ -1,0 +1,24 @@
+manifest_version: 2
+name: local-web-reader
+version: 1.0.0
+description: >-
+  Keyless web_extract backend for Hermes: reads a public web page on this
+  machine (HTTP, HTML to readable text, PDF with pypdf). A page that needs
+  JavaScript is answered with a pointer to the Hermes browser tool. No API
+  key, no third-party reading service; private and local addresses are
+  refused. Select it with web.extract_backend: local.
+author: Integritas Hatosag
+kind: backend
+
+provides_web_providers:
+  - local
+
+# pypdf (BSD-3) reads a PDF the URL points to. Optional at runtime: without it
+# a PDF is answered with a pointer to the file-reader skill. HTML and text are
+# read with the standard library.
+python_dependencies:
+  - pypdf>=4,<8
+
+# Accept-Language sent with every request. Default: en-US,en;q=0.9,*;q=0.5.
+optional_env:
+  - WEB_READER_ACCEPT_LANGUAGE
