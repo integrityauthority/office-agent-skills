@@ -234,6 +234,19 @@ Claude Code package: it plugs into a Hermes interface, so its code lives in
 the plugin directory itself (`scripts/web_reader.py`, no Hermes dependency).
 `tests/test_web_reader.py` covers it without touching the network.
 
+The same file runs on its own, so any agent that can run a command (Claude
+Code, Codex, a script) gets the page as Markdown, read from this machine:
+
+```
+python plugins/local-web-reader/scripts/web_reader.py https://example.org/article
+python plugins/local-web-reader/scripts/web_reader.py URL1 URL2 --max-chars 20000
+python plugins/local-web-reader/scripts/web_reader.py URL --json
+```
+
+Markdown output is the page title, the source URL and the readable text;
+`--json` prints one object per URL. The exit code is 0 when every URL was
+read and 1 when any failed, with the reason on stderr.
+
 ## Developing a skill
 
 Edit the files in place and run the checker:
